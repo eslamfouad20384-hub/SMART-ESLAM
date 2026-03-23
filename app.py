@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.ensemble import RandomForestClassifier
@@ -10,29 +11,24 @@ from github import Github
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status + GitHub Sync")
+st.title("🚀 Smart ")
 
 # ==============================
 # GitHub setup via Streamlit Secrets
 # ==============================
-# في App Settings > Secrets
+# ملف .streamlit/secrets.toml محتوي:
 # [GITHUB]
 # TOKEN = "ghp_XXXXXXXXXXXX"
 # REPO = "eslamfouad20384-hub/SMART-ESLAM"
-# BRANCH = "main"
+# BRANCH = "main
 
 GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
 REPO_NAME = st.secrets["GITHUB"]["REPO"]
 BRANCH = st.secrets["GITHUB"]["BRANCH"]
 FILE_PATH = "data.json"
 
-# الاتصال بـ GitHub
-try:
-    g = Github(GITHUB_TOKEN)
-    repo = g.get_repo(REPO_NAME)
-except Exception as e:
-    st.error(f"❌ خطأ في الاتصال بـ GitHub: {e}")
-    st.stop()
+g = Github(GITHUB_TOKEN)
+repo = g.get_repo(REPO_NAME)
 
 # ==============================
 # Helper functions for GitHub
@@ -87,6 +83,7 @@ def calculate_score(price, drop, rsi, volx):
     return score
 
 def update_github_row(data, coin, timestamp, price, drop, rsi, volume, volx, support, score):
+    # تحديث العملة إذا موجودة مسبقًا
     found = False
     for row in data:
         if row["coin"] == coin:
@@ -121,6 +118,8 @@ def run_collector():
     coins = get_coins()
     github_data = load_github_data()
 
+    updated_coins = []
+
     def analyze_coin(coin):
         try:
             coin_id = coin["id"]
@@ -137,15 +136,87 @@ def run_collector():
             support = np.percentile(prices[-min(20,len(prices)):],20)
             score = calculate_score(current_price, drop, rsi, volx)
             timestamp = int(data["prices"][-1][0]) if len(data.get("prices",[]))>0 else int(time.time()*1000)
-            update_github_row(github_data, coin["symbol"].upper(), timestamp, current_price, drop, rsi, volumes[-1] if len(volumes)>0 else 0, volx, support, score)
-            return coin["symbol"].upper()
-        except:
+
+            # تحديث البيانات في القاعدة أو إضافتها
+            update_github_row(github_data, coin["symbol"].upper(), timestamp, current_price, drop, rsi, 
+                              volumes[-1] if len(volumes)>0 else 0, volx, support, score)
+            updated_coins.append(coin["symbol"].upper())
+        except Exception as e:
+            st.warning(f"⚠️ خطأ في تحديث {coin['symbol'].upper()}: {e}")
             return None
 
+    # تنفيذ على كل العملات
     with ThreadPoolExecutor(max_workers=10) as executor:
-        updated = list(executor.map(analyze_coin, coins))
-    updated_count = len([u for u in updated if u])
-    st.success(f"✅ تم تحديث {updated_count} عملة على GitHub")
+        list(executor.map(analyze_coin, coins))
+
+    st.success(f"✅ تم تحديث {len(updated_coins)} عملة على GitHub")
 
 if st.button("🔄 تحديث البيانات"):
     run_collector()
+
+# ==============================
+# Load data for display & AI
+# ==============================
+github_data = load_github_data()
+df = pd.DataFrame(github_data)
+
+# ==============================
+# آخر تحديث لكل عملة
+# ==============================
+if not df.empty:
+    st.subheader("🕒 آخر تحديث لكل عملة")
+    last_update = df.groupby("coin")["timestamp"].max().reset_index()
+    last_update["last_time"] = pd.to_datetime(last_update["timestamp"], unit='ms')
+    st.dataframe(last_update.sort_values("last_time", ascending=False), use_container_width=True)
+
+# ==============================
+# AI + Signals
+# ==============================
+if not df.empty:
+    # Train AI
+    df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
+    df_ai = df.dropna()
+    X = df_ai[["rsi","score"]]
+    y = df_ai["target"]
+    model = RandomForestClassifier()
+    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
+    model.fit(X_train,y_train)
+    acc = model.score(X_test,y_test)
+
+    # Latest rows + Chance %
+    latest = df.sort_values("timestamp").groupby("coin").tail(1)
+    X_latest = latest[["rsi","score"]]
+    try:
+        probs = model.predict_proba(X_latest)[:,1]
+        latest["Chance %"] = probs*100
+    except:
+        latest["Chance %"] = 0
+
+    # Signal
+    def get_signal(score):
+        if score>=10: return "🚀 STRONG BUY"
+        elif score>=8: return "🔥 BUY"
+        elif score>=6: return "⏳ EARLY"
+        elif score>=4: return "⏳ WAIT"
+        else: return "❌ NO"
+    latest["Signal"] = latest["score"].apply(get_signal)
+
+    # Data Status
+    counts = df.groupby("coin").size()
+    def status_color(n):
+        if n>=20: return "🟩 كافي"
+        elif n>=10: return "🟨 متوسط"
+        else: return "🟥 قليل"
+    latest["Data Status"] = latest["coin"].apply(lambda c: status_color(counts.get(c,0)))
+
+    # Display table
+    latest = latest.sort_values("Chance %", ascending=False)
+    st.success(f"دقة الموديل: {round(acc*100,2)}%")
+    st.dataframe(latest[["coin","price","drop_percent","rsi","volx","support","score","Signal","Chance %","Data Status"]], use_container_width=True)
+
+    # تفاصيل أي عملة
+    coin_list = latest["coin"].unique().tolist()
+    selected_coin = st.selectbox("اختار عملة للتفاصيل", coin_list)
+    if selected_coin:
+        st.subheader(f"📊 بيانات {selected_coin}")
+        st.dataframe(df[df["coin"]==selected_coin].sort_values("timestamp", ascending=False), use_container_width=True)
