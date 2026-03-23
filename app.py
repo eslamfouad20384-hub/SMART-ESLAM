@@ -16,49 +16,59 @@ st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status")
 # Data folder setup
 # ==============================
 DB_FOLDER = "data"
-try:
-    os.makedirs(DB_FOLDER, exist_ok=True)
-except Exception as e:
-    st.warning(f"⚠️ لم يتم إنشاء فولدر البيانات: {e}")
-
 DB_PATH = os.path.join(DB_FOLDER, "crypto.db")
 CSV_PATH = os.path.join(DB_FOLDER, "crypto_backup.csv")
 
+# إنشاء فولدر البيانات بأمان
+if not os.path.exists(DB_FOLDER):
+    try:
+        os.makedirs(DB_FOLDER)
+    except Exception as e:
+        st.warning(f"⚠️ لم يتم إنشاء فولدر البيانات: {e}")
+
 # ==============================
-# Database
+# Database functions
 # ==============================
 def connect():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        return conn
+    except Exception as e:
+        st.error(f"❌ فشل الاتصال بقاعدة البيانات: {e}")
+        raise
 
 def create_tables():
-    conn = connect()
-    c = conn.cursor()
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS market_data (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        coin TEXT,
-        timestamp INTEGER,
-        price REAL,
-        drop_percent REAL,
-        rsi REAL,
-        volume REAL,
-        volx REAL,
-        support REAL,
-        score REAL
-    )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn = connect()
+        c = conn.cursor()
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS market_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            coin TEXT,
+            timestamp INTEGER,
+            price REAL,
+            drop_percent REAL,
+            rsi REAL,
+            volume REAL,
+            volx REAL,
+            support REAL,
+            score REAL
+        )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        st.error(f"❌ فشل إنشاء الجداول: {e}")
 
 create_tables()
 
 # ==============================
-# RSI
+# RSI calculation
 # ==============================
 def calculate_rsi(prices, period=14):
     delta = np.diff(prices)
-    gain = np.maximum(delta,0)
-    loss = -np.minimum(delta,0)
+    gain = np.maximum(delta, 0)
+    loss = -np.minimum(delta, 0)
     avg_gain = np.mean(gain[:period])
     avg_loss = np.mean(loss[:period])
     if avg_loss == 0: return 100
@@ -66,7 +76,7 @@ def calculate_rsi(prices, period=14):
     return 100 - (100 / (1+rs))
 
 # ==============================
-# Collector
+# Collector functions
 # ==============================
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -78,11 +88,11 @@ def fetch_coin_data(coin_id):
     params = {"vs_currency": "usd", "days": 30}
     return requests.get(url, params=params).json()
 
-def calculate_score(price, drop, rsi, volume, volx):
+def calculate_score(price, drop, rsi, vol, volx):
     score = 0
-    if drop < -25: score+=2
-    if rsi < 35: score+=2
-    if volx > 1.5: score+=2
+    if drop < -25: score +=2
+    if rsi < 35: score +=2
+    if volx > 1.5: score +=2
     return score
 
 def save_row(coin, timestamp, price, drop, rsi, volume, volx, support, score):
@@ -123,7 +133,7 @@ def run_collector():
             data = fetch_coin_data(coin_id)
             prices = np.array([p[1] for p in data["prices"]])
             volumes = np.array([v[1] for v in data["total_volumes"]])
-            if len(prices)<30: return None
+            if len(prices) < 30: return None
             current_price = prices[-1]
             max_price = prices.max()
             drop = ((current_price - max_price)/max_price)*100
@@ -184,7 +194,7 @@ else:
         else: return "❌ NO"
     latest["Signal"] = latest["score"].apply(get_signal)
 
-    # Data Status (Green/Yellow/Red)
+    # Data Status
     counts = df.groupby("coin").size()
     def status_color(n):
         if n>=20: return "🟩 كافي"
