@@ -11,17 +11,11 @@ from github import Github
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart ")
+st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status + GitHub Sync")
 
 # ==============================
 # GitHub setup via Streamlit Secrets
 # ==============================
-# ملف .streamlit/secrets.toml محتوي:
-# [GITHUB]
-# TOKEN = "ghp_XXXXXXXXXXXX"
-# REPO = "eslamfouad20384-hub/SMART-ESLAM"
-# BRANCH = "main
-
 GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
 REPO_NAME = st.secrets["GITHUB"]["REPO"]
 BRANCH = st.secrets["GITHUB"]["BRANCH"]
@@ -83,7 +77,6 @@ def calculate_score(price, drop, rsi, volx):
     return score
 
 def update_github_row(data, coin, timestamp, price, drop, rsi, volume, volx, support, score):
-    # تحديث العملة إذا موجودة مسبقًا
     found = False
     for row in data:
         if row["coin"] == coin:
@@ -117,8 +110,8 @@ def run_collector():
     st.info("⏳ جاري تحديث البيانات…")
     coins = get_coins()
     github_data = load_github_data()
-
     updated_coins = []
+    errors = []
 
     def analyze_coin(coin):
         try:
@@ -136,20 +129,18 @@ def run_collector():
             support = np.percentile(prices[-min(20,len(prices)):],20)
             score = calculate_score(current_price, drop, rsi, volx)
             timestamp = int(data["prices"][-1][0]) if len(data.get("prices",[]))>0 else int(time.time()*1000)
-
-            # تحديث البيانات في القاعدة أو إضافتها
-            update_github_row(github_data, coin["symbol"].upper(), timestamp, current_price, drop, rsi, 
-                              volumes[-1] if len(volumes)>0 else 0, volx, support, score)
+            update_github_row(github_data, coin["symbol"].upper(), timestamp, current_price, drop,
+                              rsi, volumes[-1] if len(volumes)>0 else 0, volx, support, score)
             updated_coins.append(coin["symbol"].upper())
         except Exception as e:
-            st.warning(f"⚠️ خطأ في تحديث {coin['symbol'].upper()}: {e}")
-            return None
+            errors.append(f"{coin['symbol'].upper()}: {e}")
 
-    # تنفيذ على كل العملات
     with ThreadPoolExecutor(max_workers=10) as executor:
-        list(executor.map(analyze_coin, coins))
+        executor.map(analyze_coin, coins)
 
     st.success(f"✅ تم تحديث {len(updated_coins)} عملة على GitHub")
+    if errors:
+        st.warning("⚠️ العملات اللي حصل فيها خطأ:\n" + "\n".join(errors))
 
 if st.button("🔄 تحديث البيانات"):
     run_collector()
@@ -173,7 +164,6 @@ if not df.empty:
 # AI + Signals
 # ==============================
 if not df.empty:
-    # Train AI
     df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
     df_ai = df.dropna()
     X = df_ai[["rsi","score"]]
@@ -183,7 +173,6 @@ if not df.empty:
     model.fit(X_train,y_train)
     acc = model.score(X_test,y_test)
 
-    # Latest rows + Chance %
     latest = df.sort_values("timestamp").groupby("coin").tail(1)
     X_latest = latest[["rsi","score"]]
     try:
@@ -192,7 +181,6 @@ if not df.empty:
     except:
         latest["Chance %"] = 0
 
-    # Signal
     def get_signal(score):
         if score>=10: return "🚀 STRONG BUY"
         elif score>=8: return "🔥 BUY"
@@ -201,7 +189,6 @@ if not df.empty:
         else: return "❌ NO"
     latest["Signal"] = latest["score"].apply(get_signal)
 
-    # Data Status
     counts = df.groupby("coin").size()
     def status_color(n):
         if n>=20: return "🟩 كافي"
@@ -209,12 +196,10 @@ if not df.empty:
         else: return "🟥 قليل"
     latest["Data Status"] = latest["coin"].apply(lambda c: status_color(counts.get(c,0)))
 
-    # Display table
     latest = latest.sort_values("Chance %", ascending=False)
     st.success(f"دقة الموديل: {round(acc*100,2)}%")
     st.dataframe(latest[["coin","price","drop_percent","rsi","volx","support","score","Signal","Chance %","Data Status"]], use_container_width=True)
 
-    # تفاصيل أي عملة
     coin_list = latest["coin"].unique().tolist()
     selected_coin = st.selectbox("اختار عملة للتفاصيل", coin_list)
     if selected_coin:
