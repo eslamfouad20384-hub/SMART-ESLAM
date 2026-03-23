@@ -156,20 +156,30 @@ def run_collector():
     updated_count = len([u for u in updated if u])
     st.success(f"✅ تم تحديث {updated_count} عملة")
 
-if st.button("🔄 تحديث البيانات"):
-    run_collector()
-
 # ==============================
-# Read DB & AI
+# Main logic: check DB and run Collector if empty
 # ==============================
 try:
     conn = connect()
     df = pd.read_sql("SELECT * FROM market_data", conn)
     conn.close()
-except Exception as e:
-    st.warning("❌ لا توجد بيانات بعد جمعها…")
+except Exception:
     df = pd.DataFrame()
 
+if df.empty:
+    st.info("⏳ لا توجد بيانات، جاري جمعها لأول مرة…")
+    run_collector()
+    # بعد جمع البيانات، نعيد القراءة
+    try:
+        conn = connect()
+        df = pd.read_sql("SELECT * FROM market_data", conn)
+        conn.close()
+    except Exception:
+        df = pd.DataFrame()
+
+# ==============================
+# AI Training + Display
+# ==============================
 if not df.empty:
     # Train AI
     df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
