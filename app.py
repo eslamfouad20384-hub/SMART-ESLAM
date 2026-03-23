@@ -19,47 +19,34 @@ DB_FOLDER = "data"
 DB_PATH = os.path.join(DB_FOLDER, "crypto.db")
 CSV_PATH = os.path.join(DB_FOLDER, "crypto_backup.csv")
 
-# إنشاء فولدر البيانات بأمان
 if not os.path.exists(DB_FOLDER):
-    try:
-        os.makedirs(DB_FOLDER)
-        st.info(f"✅ تم إنشاء فولدر البيانات: {DB_FOLDER}")
-    except Exception as e:
-        st.warning(f"⚠️ لم يتم إنشاء فولدر البيانات: {e}")
+    os.makedirs(DB_FOLDER)
 
 # ==============================
 # Database functions
 # ==============================
 def connect():
-    try:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        return conn
-    except Exception as e:
-        st.error(f"❌ فشل الاتصال بقاعدة البيانات: {e}")
-        raise
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def create_tables():
-    try:
-        conn = connect()
-        c = conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS market_data (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            coin TEXT,
-            timestamp INTEGER,
-            price REAL,
-            drop_percent REAL,
-            rsi REAL,
-            volume REAL,
-            volx REAL,
-            support REAL,
-            score REAL
-        )
-        """)
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        st.error(f"❌ فشل إنشاء الجداول: {e}")
+    conn = connect()
+    c = conn.cursor()
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS market_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        coin TEXT,
+        timestamp INTEGER,
+        price REAL,
+        drop_percent REAL,
+        rsi REAL,
+        volume REAL,
+        volx REAL,
+        support REAL,
+        score REAL
+    )
+    """)
+    conn.commit()
+    conn.close()
 
 create_tables()
 
@@ -89,27 +76,25 @@ def fetch_coin_data(coin_id):
     params = {"vs_currency": "usd", "days": 30}
     return requests.get(url, params=params).json()
 
-def calculate_score(price, drop, rsi, vol, volx):
+def calculate_score(price, drop, rsi, volx):
     score = 0
-    if drop < -25: score +=2
-    if rsi < 35: score +=2
-    if volx > 1.5: score +=2
+    if drop < -25: score += 2
+    if rsi < 35: score += 2
+    if volx > 1.5: score += 2
     return score
 
 def save_row(coin, timestamp, price, drop, rsi, volume, volx, support, score):
-    try:
-        conn = connect()
-        c = conn.cursor()
-        c.execute("""
-        INSERT INTO market_data (coin, timestamp, price, drop_percent, rsi, volume, volx, support, score)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (coin, timestamp, price, drop, rsi, volume, volx, support, score))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        st.error(f"❌ فشل حفظ البيانات: {e}")
+    # Save to DB
+    conn = connect()
+    c = conn.cursor()
+    c.execute("""
+    INSERT INTO market_data (coin, timestamp, price, drop_percent, rsi, volume, volx, support, score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (coin, timestamp, price, drop, rsi, volume, volx, support, score))
+    conn.commit()
+    conn.close()
 
-    # Backup to CSV
+    # Backup CSV
     row_df = pd.DataFrame([{
         "coin": coin,
         "timestamp": timestamp,
@@ -134,19 +119,19 @@ def run_collector():
         try:
             coin_id = coin["id"]
             data = fetch_coin_data(coin_id)
-            prices = np.array([p[1] for p in data["prices"]])
-            volumes = np.array([v[1] for v in data["total_volumes"]])
-            if len(prices) < 30: return None
+            prices = np.array([p[1] for p in data.get("prices",[])])
+            volumes = np.array([v[1] for v in data.get("total_volumes",[])])
+            if len(prices) == 0: return None  # لو مفيش بيانات نهائي
             current_price = prices[-1]
             max_price = prices.max()
             drop = ((current_price - max_price)/max_price)*100
-            rsi = calculate_rsi(prices[-15:])
-            avg_vol = volumes[:-1].mean()
-            volx = volumes[-1]/avg_vol
-            support = np.percentile(prices[-20:],20)
-            score = calculate_score(current_price, drop, rsi, volumes[-1], volx)
-            timestamp = int(data["prices"][-1][0])
-            save_row(coin["symbol"].upper(), timestamp, current_price, drop, rsi, volumes[-1], volx, support, score)
+            rsi = calculate_rsi(prices[-min(15,len(prices)):])
+            avg_vol = volumes[:-1].mean() if len(volumes)>1 else volumes[-1]
+            volx = volumes[-1]/avg_vol if avg_vol>0 else 1
+            support = np.percentile(prices[-min(20,len(prices)):],20)
+            score = calculate_score(current_price, drop, rsi, volx)
+            timestamp = int(data["prices"][-1][0]) if len(data.get("prices",[]))>0 else int(time.time()*1000)
+            save_row(coin["symbol"].upper(), timestamp, current_price, drop, rsi, volumes[-1] if len(volumes)>0 else 0, volx, support, score)
             return coin["symbol"].upper()
         except:
             return None
@@ -156,30 +141,16 @@ def run_collector():
     updated_count = len([u for u in updated if u])
     st.success(f"✅ تم تحديث {updated_count} عملة")
 
-# ==============================
-# Main logic: check DB and run Collector if empty
-# ==============================
-try:
-    conn = connect()
-    df = pd.read_sql("SELECT * FROM market_data", conn)
-    conn.close()
-except Exception:
-    df = pd.DataFrame()
-
-if df.empty:
-    st.info("⏳ لا توجد بيانات، جاري جمعها لأول مرة…")
+if st.button("🔄 تحديث البيانات"):
     run_collector()
-    # بعد جمع البيانات، نعيد القراءة
-    try:
-        conn = connect()
-        df = pd.read_sql("SELECT * FROM market_data", conn)
-        conn.close()
-    except Exception:
-        df = pd.DataFrame()
 
 # ==============================
-# AI Training + Display
+# Read DB & AI
 # ==============================
+conn = connect()
+df = pd.read_sql("SELECT * FROM market_data", conn)
+conn.close()
+
 if not df.empty:
     # Train AI
     df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
@@ -197,7 +168,7 @@ if not df.empty:
     try:
         probs = model.predict_proba(X_latest)[:,1]
         latest["Chance %"] = probs*100
-    except Exception:
+    except:
         latest["Chance %"] = 0
 
     # Signal
