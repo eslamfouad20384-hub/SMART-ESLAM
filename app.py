@@ -10,7 +10,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI")
+st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status")
 
 # ==============================
 # Data folder setup
@@ -23,6 +23,7 @@ CSV_PATH = os.path.join(DB_FOLDER, "crypto_backup.csv")
 if not os.path.exists(DB_FOLDER):
     try:
         os.makedirs(DB_FOLDER)
+        st.info(f"✅ تم إنشاء فولدر البيانات: {DB_FOLDER}")
     except Exception as e:
         st.warning(f"⚠️ لم يتم إنشاء فولدر البيانات: {e}")
 
@@ -96,14 +97,17 @@ def calculate_score(price, drop, rsi, vol, volx):
     return score
 
 def save_row(coin, timestamp, price, drop, rsi, volume, volx, support, score):
-    conn = connect()
-    c = conn.cursor()
-    c.execute("""
-    INSERT INTO market_data (coin, timestamp, price, drop_percent, rsi, volume, volx, support, score)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (coin, timestamp, price, drop, rsi, volume, volx, support, score))
-    conn.commit()
-    conn.close()
+    try:
+        conn = connect()
+        c = conn.cursor()
+        c.execute("""
+        INSERT INTO market_data (coin, timestamp, price, drop_percent, rsi, volume, volx, support, score)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (coin, timestamp, price, drop, rsi, volume, volx, support, score))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        st.error(f"❌ فشل حفظ البيانات: {e}")
 
     # Backup to CSV
     row_df = pd.DataFrame([{
@@ -125,7 +129,6 @@ def save_row(coin, timestamp, price, drop, rsi, volume, volx, support, score):
 def run_collector():
     st.info("⏳ جاري تحديث البيانات…")
     coins = get_coins()
-    updated_count = 0
 
     def analyze_coin(coin):
         try:
@@ -159,13 +162,15 @@ if st.button("🔄 تحديث البيانات"):
 # ==============================
 # Read DB & AI
 # ==============================
-conn = connect()
-df = pd.read_sql("SELECT * FROM market_data", conn)
-conn.close()
-
-if df.empty:
+try:
+    conn = connect()
+    df = pd.read_sql("SELECT * FROM market_data", conn)
+    conn.close()
+except Exception as e:
     st.warning("❌ لا توجد بيانات بعد جمعها…")
-else:
+    df = pd.DataFrame()
+
+if not df.empty:
     # Train AI
     df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
     df_ai = df.dropna()
