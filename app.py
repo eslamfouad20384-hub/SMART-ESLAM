@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import sqlite3
 import requests
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.ensemble import RandomForestClassifier
@@ -11,13 +12,20 @@ from sklearn.model_selection import train_test_split
 st.set_page_config(layout="wide")
 st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status")
 
-DB_NAME = "crypto.db"
+# ==============================
+# Data folder setup
+# ==============================
+DB_FOLDER = "data"
+os.makedirs(DB_FOLDER, exist_ok=True)
+
+DB_PATH = os.path.join(DB_FOLDER, "crypto.db")
+CSV_PATH = os.path.join(DB_FOLDER, "crypto_backup.csv")
 
 # ==============================
 # Database
 # ==============================
 def connect():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def create_tables():
     conn = connect()
@@ -84,6 +92,23 @@ def save_row(coin, timestamp, price, drop, rsi, volume, volx, support, score):
     conn.commit()
     conn.close()
 
+    # Backup to CSV
+    row_df = pd.DataFrame([{
+        "coin": coin,
+        "timestamp": timestamp,
+        "price": price,
+        "drop_percent": drop,
+        "rsi": rsi,
+        "volume": volume,
+        "volx": volx,
+        "support": support,
+        "score": score
+    }])
+    if not os.path.exists(CSV_PATH):
+        row_df.to_csv(CSV_PATH, index=False)
+    else:
+        row_df.to_csv(CSV_PATH, mode='a', header=False, index=False)
+
 def run_collector():
     st.info("⏳ جاري تحديث البيانات…")
     coins = get_coins()
@@ -128,9 +153,7 @@ conn.close()
 if df.empty:
     st.warning("❌ لا توجد بيانات بعد جمعها…")
 else:
-    # ==============================
     # Train AI
-    # ==============================
     df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
     df_ai = df.dropna()
     X = df_ai[["rsi","score"]]
@@ -140,29 +163,22 @@ else:
     model.fit(X_train,y_train)
     acc = model.score(X_test,y_test)
 
-    # ==============================
     # Latest rows + Chance %
-    # ==============================
     latest = df.sort_values("timestamp").groupby("coin").tail(1)
     X_latest = latest[["rsi","score"]]
     probs = model.predict_proba(X_latest)[:,1]
     latest["Chance %"] = probs*100
 
-    # ==============================
     # Signal
-    # ==============================
     def get_signal(score):
         if score>=10: return "🚀 STRONG BUY"
         elif score>=8: return "🔥 BUY"
         elif score>=6: return "⏳ EARLY"
         elif score>=4: return "⏳ WAIT"
         else: return "❌ NO"
-
     latest["Signal"] = latest["score"].apply(get_signal)
 
-    # ==============================
     # Data Status (Green/Yellow/Red)
-    # ==============================
     counts = df.groupby("coin").size()
     def status_color(n):
         if n>=20: return "🟩 كافي"
@@ -170,16 +186,12 @@ else:
         else: return "🟥 قليل"
     latest["Data Status"] = latest["coin"].apply(lambda c: status_color(counts.get(c,0)))
 
-    # ==============================
     # Display table
-    # ==============================
     latest = latest.sort_values("Chance %", ascending=False)
     st.success(f"دقة الموديل: {round(acc*100,2)}%")
     st.dataframe(latest[["coin","price","drop_percent","rsi","volx","support","score","Signal","Chance %","Data Status"]], use_container_width=True)
 
-    # ==============================
     # تفاصيل أي عملة
-    # ==============================
     coin_list = latest["coin"].unique().tolist()
     selected_coin = st.selectbox("اختار عملة للتفاصيل", coin_list)
     if selected_coin:
