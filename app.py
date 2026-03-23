@@ -10,7 +10,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status")
+st.title("🚀 Smart Crypto Scanner AI")
 
 # ==============================
 # Data folder setup
