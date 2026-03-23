@@ -9,12 +9,12 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI (ملف واحد)")
+st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status")
 
 DB_NAME = "crypto.db"
 
 # ==============================
-# Database functions
+# Database
 # ==============================
 def connect():
     return sqlite3.connect(DB_NAME, check_same_thread=False)
@@ -28,8 +28,11 @@ def create_tables():
         coin TEXT,
         timestamp INTEGER,
         price REAL,
-        volume REAL,
+        drop_percent REAL,
         rsi REAL,
+        volume REAL,
+        volx REAL,
+        support REAL,
         score REAL
     )
     """)
@@ -39,21 +42,20 @@ def create_tables():
 create_tables()
 
 # ==============================
-# RSI function
+# RSI
 # ==============================
 def calculate_rsi(prices, period=14):
     delta = np.diff(prices)
-    gain = np.maximum(delta, 0)
-    loss = -np.minimum(delta, 0)
+    gain = np.maximum(delta,0)
+    loss = -np.minimum(delta,0)
     avg_gain = np.mean(gain[:period])
     avg_loss = np.mean(loss[:period])
-    if avg_loss == 0:
-        return 100
+    if avg_loss == 0: return 100
     rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    return 100 - (100 / (1+rs))
 
 # ==============================
-# Collector (fetch & store)
+# Collector
 # ==============================
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -65,60 +67,59 @@ def fetch_coin_data(coin_id):
     params = {"vs_currency": "usd", "days": 30}
     return requests.get(url, params=params).json()
 
-def calculate_score(price, max_price, rsi, volume, avg_volume):
+def calculate_score(price, drop, rsi, volume, volx):
     score = 0
-    drop = ((price - max_price)/max_price)*100
     if drop < -25: score+=2
     if rsi < 35: score+=2
-    if volume > avg_volume*1.5: score+=2
+    if volx > 1.5: score+=2
     return score
 
-def save_row(coin, timestamp, price, volume, rsi, score):
+def save_row(coin, timestamp, price, drop, rsi, volume, volx, support, score):
     conn = connect()
     c = conn.cursor()
     c.execute("""
-    INSERT INTO market_data (coin, timestamp, price, volume, rsi, score)
-    VALUES (?, ?, ?, ?, ?, ?)
-    """, (coin, timestamp, price, volume, rsi, score))
+    INSERT INTO market_data (coin, timestamp, price, drop_percent, rsi, volume, volx, support, score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (coin, timestamp, price, drop, rsi, volume, volx, support, score))
     conn.commit()
     conn.close()
 
-def run_collector_once():
-    conn = connect()
-    df_check = pd.read_sql("SELECT * FROM market_data", conn)
-    conn.close()
-    if df_check.empty:
-        st.info("⏳ لا توجد بيانات، البرنامج بيجيب البيانات لأول مرة…")
-        coins = get_coins()
-        results = []
+def run_collector():
+    st.info("⏳ جاري تحديث البيانات…")
+    coins = get_coins()
+    updated_count = 0
 
-        def analyze_coin(coin):
-            try:
-                coin_id = coin["id"]
-                data = fetch_coin_data(coin_id)
-                prices = np.array([p[1] for p in data["prices"]])
-                volumes = np.array([v[1] for v in data["total_volumes"]])
-                if len(prices) < 30: return None
-                current_price = prices[-1]
-                max_price = prices.max()
-                rsi = calculate_rsi(prices[-15:])
-                avg_volume = volumes[:-1].mean()
-                current_volume = volumes[-1]
-                score = calculate_score(current_price, max_price, rsi, current_volume, avg_volume)
-                timestamp = int(data["prices"][-1][0])
-                save_row(coin["symbol"].upper(), timestamp, current_price, current_volume, rsi, score)
-                return coin["symbol"].upper()
-            except:
-                return None
+    def analyze_coin(coin):
+        try:
+            coin_id = coin["id"]
+            data = fetch_coin_data(coin_id)
+            prices = np.array([p[1] for p in data["prices"]])
+            volumes = np.array([v[1] for v in data["total_volumes"]])
+            if len(prices)<30: return None
+            current_price = prices[-1]
+            max_price = prices.max()
+            drop = ((current_price - max_price)/max_price)*100
+            rsi = calculate_rsi(prices[-15:])
+            avg_vol = volumes[:-1].mean()
+            volx = volumes[-1]/avg_vol
+            support = np.percentile(prices[-20:],20)
+            score = calculate_score(current_price, drop, rsi, volumes[-1], volx)
+            timestamp = int(data["prices"][-1][0])
+            save_row(coin["symbol"].upper(), timestamp, current_price, drop, rsi, volumes[-1], volx, support, score)
+            return coin["symbol"].upper()
+        except:
+            return None
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            updated = list(executor.map(analyze_coin, coins))
-        st.success(f"✅ تم تحديث {len([u for u in updated if u])} عملة")
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        updated = list(executor.map(analyze_coin, coins))
+    updated_count = len([u for u in updated if u])
+    st.success(f"✅ تم تحديث {updated_count} عملة")
 
-run_collector_once()
+if st.button("🔄 تحديث البيانات"):
+    run_collector()
 
 # ==============================
-# Read DB & Train AI
+# Read DB & AI
 # ==============================
 conn = connect()
 df = pd.read_sql("SELECT * FROM market_data", conn)
@@ -127,21 +128,60 @@ conn.close()
 if df.empty:
     st.warning("❌ لا توجد بيانات بعد جمعها…")
 else:
-    # Prepare target
+    # ==============================
+    # Train AI
+    # ==============================
     df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
-    df = df.dropna()
-    X = df[["rsi","score"]]
-    y = df["target"]
-    # Train model
+    df_ai = df.dropna()
+    X = df_ai[["rsi","score"]]
+    y = df_ai["target"]
     model = RandomForestClassifier()
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-    model.fit(X_train, y_train)
-    acc = model.score(X_test, y_test)
-    # Predict latest
+    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
+    model.fit(X_train,y_train)
+    acc = model.score(X_test,y_test)
+
+    # ==============================
+    # Latest rows + Chance %
+    # ==============================
     latest = df.sort_values("timestamp").groupby("coin").tail(1)
     X_latest = latest[["rsi","score"]]
     probs = model.predict_proba(X_latest)[:,1]
     latest["Chance %"] = probs*100
+
+    # ==============================
+    # Signal
+    # ==============================
+    def get_signal(score):
+        if score>=10: return "🚀 STRONG BUY"
+        elif score>=8: return "🔥 BUY"
+        elif score>=6: return "⏳ EARLY"
+        elif score>=4: return "⏳ WAIT"
+        else: return "❌ NO"
+
+    latest["Signal"] = latest["score"].apply(get_signal)
+
+    # ==============================
+    # Data Status (Green/Yellow/Red)
+    # ==============================
+    counts = df.groupby("coin").size()
+    def status_color(n):
+        if n>=20: return "🟩 كافي"
+        elif n>=10: return "🟨 متوسط"
+        else: return "🟥 قليل"
+    latest["Data Status"] = latest["coin"].apply(lambda c: status_color(counts.get(c,0)))
+
+    # ==============================
+    # Display table
+    # ==============================
     latest = latest.sort_values("Chance %", ascending=False)
     st.success(f"دقة الموديل: {round(acc*100,2)}%")
-    st.dataframe(latest[["coin","price","rsi","score","Chance %"]], use_container_width=True)
+    st.dataframe(latest[["coin","price","drop_percent","rsi","volx","support","score","Signal","Chance %","Data Status"]], use_container_width=True)
+
+    # ==============================
+    # تفاصيل أي عملة
+    # ==============================
+    coin_list = latest["coin"].unique().tolist()
+    selected_coin = st.selectbox("اختار عملة للتفاصيل", coin_list)
+    if selected_coin:
+        st.subheader(f"📊 بيانات {selected_coin}")
+        st.dataframe(df[df["coin"]==selected_coin].sort_values("timestamp", ascending=False), use_container_width=True)
