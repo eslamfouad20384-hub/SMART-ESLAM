@@ -16,7 +16,10 @@ st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status")
 # Data folder setup
 # ==============================
 DB_FOLDER = "data"
-os.makedirs(DB_FOLDER, exist_ok=True)
+try:
+    os.makedirs(DB_FOLDER, exist_ok=True)
+except Exception as e:
+    st.warning(f"⚠️ لم يتم إنشاء فولدر البيانات: {e}")
 
 DB_PATH = os.path.join(DB_FOLDER, "crypto.db")
 CSV_PATH = os.path.join(DB_FOLDER, "crypto_backup.csv")
@@ -166,8 +169,11 @@ else:
     # Latest rows + Chance %
     latest = df.sort_values("timestamp").groupby("coin").tail(1)
     X_latest = latest[["rsi","score"]]
-    probs = model.predict_proba(X_latest)[:,1]
-    latest["Chance %"] = probs*100
+    try:
+        probs = model.predict_proba(X_latest)[:,1]
+        latest["Chance %"] = probs*100
+    except Exception:
+        latest["Chance %"] = 0
 
     # Signal
     def get_signal(score):
