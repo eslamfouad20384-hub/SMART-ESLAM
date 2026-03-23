@@ -1,54 +1,53 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import sqlite3
 import requests
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
+from github import Github
+import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status")
+st.title("🚀 Smart Crypto Scanner AI + Signals + Data Status + GitHub Sync")
 
 # ==============================
-# Data folder setup
+# GitHub setup via Streamlit Secrets
 # ==============================
-DB_FOLDER = "data"
-DB_PATH = os.path.join(DB_FOLDER, "crypto.db")
-CSV_PATH = os.path.join(DB_FOLDER, "crypto_backup.csv")
+# ملف .streamlit/secrets.toml محتوي:
+# [GITHUB]
+# TOKEN = "ghp_XXXXXXXXXXXX"
+# REPO = "eslamfouad20384-hub/crypto-scanner"
+# BRANCH = "data"
 
-if not os.path.exists(DB_FOLDER):
-    os.makedirs(DB_FOLDER)
+GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
+REPO_NAME = st.secrets["GITHUB"]["REPO"]
+BRANCH = st.secrets["GITHUB"]["BRANCH"]
+FILE_PATH = "data.json"
+
+g = Github(GITHUB_TOKEN)
+repo = g.get_user().get_repo(REPO_NAME)
 
 # ==============================
-# Database functions
+# Helper functions for GitHub
 # ==============================
-def connect():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+def load_github_data():
+    try:
+        contents = repo.get_contents(FILE_PATH, ref=BRANCH)
+        data = json.loads(contents.decoded_content.decode())
+    except:
+        data = []  # file not exist yet
+    return data
 
-def create_tables():
-    conn = connect()
-    c = conn.cursor()
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS market_data (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        coin TEXT,
-        timestamp INTEGER,
-        price REAL,
-        drop_percent REAL,
-        rsi REAL,
-        volume REAL,
-        volx REAL,
-        support REAL,
-        score REAL
-    )
-    """)
-    conn.commit()
-    conn.close()
-
-create_tables()
+def save_github_data(data):
+    content = json.dumps(data, indent=4)
+    try:
+        contents = repo.get_contents(FILE_PATH, ref=BRANCH)
+        repo.update_file(contents.path, "Update data", content, contents.sha, branch=BRANCH)
+    except:
+        repo.create_file(FILE_PATH, "Create data", content, branch=BRANCH)
 
 # ==============================
 # RSI calculation
@@ -83,37 +82,41 @@ def calculate_score(price, drop, rsi, volx):
     if volx > 1.5: score += 2
     return score
 
-def save_row(coin, timestamp, price, drop, rsi, volume, volx, support, score):
-    # Save to DB
-    conn = connect()
-    c = conn.cursor()
-    c.execute("""
-    INSERT INTO market_data (coin, timestamp, price, drop_percent, rsi, volume, volx, support, score)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (coin, timestamp, price, drop, rsi, volume, volx, support, score))
-    conn.commit()
-    conn.close()
-
-    # Backup CSV
-    row_df = pd.DataFrame([{
-        "coin": coin,
-        "timestamp": timestamp,
-        "price": price,
-        "drop_percent": drop,
-        "rsi": rsi,
-        "volume": volume,
-        "volx": volx,
-        "support": support,
-        "score": score
-    }])
-    if not os.path.exists(CSV_PATH):
-        row_df.to_csv(CSV_PATH, index=False)
-    else:
-        row_df.to_csv(CSV_PATH, mode='a', header=False, index=False)
+def update_github_row(data, coin, timestamp, price, drop, rsi, volume, volx, support, score):
+    # تحديث العملة إذا موجودة مسبقًا
+    found = False
+    for row in data:
+        if row["coin"] == coin:
+            row.update({
+                "timestamp": timestamp,
+                "price": price,
+                "drop_percent": drop,
+                "rsi": rsi,
+                "volume": volume,
+                "volx": volx,
+                "support": support,
+                "score": score
+            })
+            found = True
+            break
+    if not found:
+        data.append({
+            "coin": coin,
+            "timestamp": timestamp,
+            "price": price,
+            "drop_percent": drop,
+            "rsi": rsi,
+            "volume": volume,
+            "volx": volx,
+            "support": support,
+            "score": score
+        })
+    save_github_data(data)
 
 def run_collector():
     st.info("⏳ جاري تحديث البيانات…")
     coins = get_coins()
+    github_data = load_github_data()
 
     def analyze_coin(coin):
         try:
@@ -121,7 +124,7 @@ def run_collector():
             data = fetch_coin_data(coin_id)
             prices = np.array([p[1] for p in data.get("prices",[])])
             volumes = np.array([v[1] for v in data.get("total_volumes",[])])
-            if len(prices) == 0: return None  # لو مفيش بيانات نهائي
+            if len(prices) == 0: return None
             current_price = prices[-1]
             max_price = prices.max()
             drop = ((current_price - max_price)/max_price)*100
@@ -131,7 +134,7 @@ def run_collector():
             support = np.percentile(prices[-min(20,len(prices)):],20)
             score = calculate_score(current_price, drop, rsi, volx)
             timestamp = int(data["prices"][-1][0]) if len(data.get("prices",[]))>0 else int(time.time()*1000)
-            save_row(coin["symbol"].upper(), timestamp, current_price, drop, rsi, volumes[-1] if len(volumes)>0 else 0, volx, support, score)
+            update_github_row(github_data, coin["symbol"].upper(), timestamp, current_price, drop, rsi, volumes[-1] if len(volumes)>0 else 0, volx, support, score)
             return coin["symbol"].upper()
         except:
             return None
@@ -139,17 +142,16 @@ def run_collector():
     with ThreadPoolExecutor(max_workers=10) as executor:
         updated = list(executor.map(analyze_coin, coins))
     updated_count = len([u for u in updated if u])
-    st.success(f"✅ تم تحديث {updated_count} عملة")
+    st.success(f"✅ تم تحديث {updated_count} عملة على GitHub")
 
 if st.button("🔄 تحديث البيانات"):
     run_collector()
 
 # ==============================
-# Read DB & AI
+# Load data for display & AI
 # ==============================
-conn = connect()
-df = pd.read_sql("SELECT * FROM market_data", conn)
-conn.close()
+github_data = load_github_data()
+df = pd.DataFrame(github_data)
 
 if not df.empty:
     # Train AI
