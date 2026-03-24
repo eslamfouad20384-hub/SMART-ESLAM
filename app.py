@@ -62,7 +62,10 @@ def get_coins_coingecko():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
     try:
-        return requests.get(url, params=params).json()
+        data = requests.get(url, params=params).json()
+        if isinstance(data, list):
+            return data
+        return []
     except:
         return []
 
@@ -71,7 +74,9 @@ def get_coins_cryptocompare():
     params = {"limit":50,"tsym":"USD"}
     try:
         data = requests.get(url, params=params).json()
-        return [{"id":coin["CoinInfo"]["Name"], "symbol":coin["CoinInfo"]["Name"].upper()} for coin in data.get("Data",[])]
+        coins = [{"id":coin["CoinInfo"]["Name"], "symbol":coin["CoinInfo"]["Name"].upper()} 
+                 for coin in data.get("Data",[]) if "CoinInfo" in coin]
+        return coins if isinstance(coins, list) else []
     except:
         return []
 
@@ -79,7 +84,9 @@ def get_coins_binance():
     url = "https://api.binance.com/api/v3/ticker/24hr"
     try:
         data = requests.get(url).json()
-        return [{"id":coin["symbol"], "symbol":coin["symbol"]} for coin in data if coin["symbol"].endswith("USDT")]
+        coins = [{"id":coin["symbol"], "symbol":coin["symbol"]} 
+                 for coin in data if "symbol" in coin and coin["symbol"].endswith("USDT")]
+        return coins if isinstance(coins, list) else []
     except:
         return []
 
@@ -87,7 +94,10 @@ def fetch_coin_data_daily(coin_id, source="coingecko"):
     if source=="coingecko":
         url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
         params = {"vs_currency": "usd", "days": 30, "interval":"daily"}
-        return requests.get(url, params=params).json()
+        try:
+            return requests.get(url, params=params).json()
+        except:
+            return {"prices":[],"total_volumes":[]}
     return {"prices":[],"total_volumes":[]}
 
 def calculate_score(price, drop, rsi, volx):
@@ -129,7 +139,14 @@ def update_github_row(data, coin, timestamp, price, drop, rsi, volume, volx, sup
 
 def run_collector():
     st.info("⏳ جاري تحديث البيانات…")
-    coins = get_coins_coingecko() + get_coins_cryptocompare() + get_coins_binance()
+    
+    # اجمع العملات مع التأكد إنهم List
+    coins = []
+    for func in [get_coins_coingecko, get_coins_cryptocompare, get_coins_binance]:
+        result = func()
+        if isinstance(result, list):
+            coins += result
+
     github_data = load_github_data()
 
     def analyze_coin(coin):
@@ -150,8 +167,7 @@ def run_collector():
             timestamp = int(data["prices"][-1][0]) if len(data.get("prices",[]))>0 else int(time.time()*1000)
             update_github_row(github_data, coin["symbol"].upper(), timestamp, current_price, drop, rsi, volumes[-1] if len(volumes)>0 else 0, volx, support, score)
             return coin["symbol"].upper()
-        except Exception as e:
-            st.warning(f"⚠️ خطأ في تحديث {coin['symbol'].upper()}: {e}")
+        except:
             return None
 
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -165,7 +181,7 @@ def run_collector():
 if "last_run" not in st.session_state:
     st.session_state.last_run = 0
 
-if time.time() - st.session_state.last_run > 600:  # 600 ثانية = 10 دقايق
+if time.time() - st.session_state.last_run > 600:
     run_collector()
     st.session_state.last_run = time.time()
 
@@ -181,17 +197,12 @@ df = pd.DataFrame(github_data)
 if df.empty:
     st.warning("⚠️ مفيش بيانات لعرضها دلوقتي")
 else:
-    # ==============================
-    # AI + إشارات + جدول نهائي
-    # ==============================
     df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
     df_ai = df.dropna()
 
     if len(df_ai) > 10:
-
         X = df_ai[["rsi","score"]]
         y = df_ai["target"]
-
         model = RandomForestClassifier()
         X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
         model.fit(X_train,y_train)
@@ -199,7 +210,6 @@ else:
 
         latest = df.sort_values("timestamp").groupby("coin").tail(1)
         X_latest = latest[["rsi","score"]]
-
         try:
             probs = model.predict_proba(X_latest)[:,1]
             latest["Chance %"] = probs * 100
@@ -207,7 +217,7 @@ else:
             latest["Chance %"] = 0
 
         # ==============================
-        # إشارات التداول (4 حالات)
+        # إشارات التداول
         # ==============================
         def get_signal(score):
             if score >= 6:
@@ -222,7 +232,7 @@ else:
         latest["Signal"] = latest["score"].apply(get_signal)
 
         # ==============================
-        # حالة البيانات (🟩🟨🟥)
+        # حالة البيانات
         # ==============================
         counts = df.groupby("coin").size()
         def status_color(n):
@@ -232,17 +242,12 @@ else:
                 return "🟨 متوسط"
             else:
                 return "🟥 قليل"
-        latest["Data Status"] = latest["coin"].apply(lambda c: status_color(counts.get(c, 0)))
 
-        # ==============================
-        # ترتيب الجدول
-        # ==============================
+        latest["Data Status"] = latest["coin"].apply(lambda c: status_color(counts.get(c, 0)))
         latest = latest.sort_values("Chance %", ascending=False)
+
         st.success(f"دقة الموديل: {round(acc*100,2)}%")
 
-        # ==============================
-        # تجهيز وعرض الجدول النهائي
-        # ==============================
         display_df = latest[[
             "coin","price","drop_percent","rsi","volx","support","score","Signal","Chance %","Data Status"
         ]].rename(columns={
@@ -266,7 +271,7 @@ else:
             elif "انتظار" in val:
                 return "background-color: orange"
             else:
-                return "background-color: red; color: white"
+                return ""  # بدون ظل أحمر
 
         def color_data_status(val):
             if "🟩" in val:
@@ -274,7 +279,7 @@ else:
             elif "🟨" in val:
                 return "background-color: orange"
             else:
-                return "background-color: red; color: white"
+                return "background-color: lightgrey"  # بدل الأحمر
 
         st.dataframe(
             display_df.style
@@ -282,6 +287,5 @@ else:
             .applymap(color_data_status, subset=["حالة البيانات"]),
             use_container_width=True
         )
-
     else:
         st.warning("⚠️ البيانات غير كافية لتشغيل AI")
