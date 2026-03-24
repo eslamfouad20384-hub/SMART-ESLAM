@@ -1490,5 +1490,9 @@
     {
         "coin": "RUSD",
         "candles": []
+    },
+    {
+        "coin": "FDUSD",
+        "candles": []
     }
 ]
