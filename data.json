@@ -596,5 +596,21 @@
     {
         "coin": "ADA",
         "candles": []
+    },
+    {
+        "coin": "SUI",
+        "candles": []
+    },
+    {
+        "coin": "PEPE",
+        "candles": []
+    },
+    {
+        "coin": "HYPE",
+        "candles": []
+    },
+    {
+        "coin": "ZEC",
+        "candles": []
     }
 ]
