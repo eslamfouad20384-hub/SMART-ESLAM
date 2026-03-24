@@ -648,5 +648,21 @@
     {
         "coin": "UNI",
         "candles": []
+    },
+    {
+        "coin": "NEAR",
+        "candles": []
+    },
+    {
+        "coin": "SUN",
+        "candles": []
+    },
+    {
+        "coin": "SHIB",
+        "candles": []
+    },
+    {
+        "coin": "DAI",
+        "candles": []
     }
 ]
