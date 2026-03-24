@@ -636,5 +636,17 @@
     {
         "coin": "ASTER",
         "candles": []
+    },
+    {
+        "coin": "BCH",
+        "candles": []
+    },
+    {
+        "coin": "DOT",
+        "candles": []
+    },
+    {
+        "coin": "UNI",
+        "candles": []
     }
 ]
