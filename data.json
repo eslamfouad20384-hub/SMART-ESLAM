@@ -1689,5 +1689,9 @@
     {
         "coin": "FDUSD",
         "candles": []
+    },
+    {
+        "coin": "TRUMP",
+        "candles": []
     }
 ]
