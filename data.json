@@ -1713,5 +1713,9 @@
     {
         "coin": "TRUMP",
         "candles": []
+    },
+    {
+        "coin": "PYUSD",
+        "candles": []
     }
 ]
