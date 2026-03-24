@@ -567,7 +567,8 @@
         "volume": 104227211.89576872,
         "volx": 1.0622820728097637,
         "support": 1.2909682696260545,
-        "score": 0
+        "score": 0,
+        "candles": []
     },
     {
         "coin": "NIGHT",
@@ -711,6 +712,22 @@
     },
     {
         "coin": "FIL",
+        "candles": []
+    },
+    {
+        "coin": "WLD",
+        "candles": []
+    },
+    {
+        "coin": "HBAR",
+        "candles": []
+    },
+    {
+        "coin": "WMTX",
+        "candles": []
+    },
+    {
+        "coin": "USAD",
         "candles": []
     }
 ]
