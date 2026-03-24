@@ -664,5 +664,17 @@
     {
         "coin": "DAI",
         "candles": []
+    },
+    {
+        "coin": "FET",
+        "candles": []
+    },
+    {
+        "coin": "ENA",
+        "candles": []
+    },
+    {
+        "coin": "BTR",
+        "candles": []
     }
 ]
