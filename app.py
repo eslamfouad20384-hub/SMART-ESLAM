@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO - Full Version")
+st.title("🚀 Smart Crypto Scanner AI PRO")
 
 # ==============================
 # GitHub setup
@@ -24,7 +24,7 @@ g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
 # ==============================
-# GitHub functions
+# GitHub
 # ==============================
 def load_github_data():
     try:
@@ -63,23 +63,12 @@ def calculate_rsi(prices, period=14):
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except:
-        st.error("⚠️ فشل جلب العملات من CoinGecko")
-        return []
+    return requests.get(url, params=params).json()
 
 def fetch_data(coin_id, days=30):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     params = {"vs_currency":"usd","days":days}
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except:
-        return {"prices":[],"total_volumes":[]}
+    return requests.get(url, params=params).json()
 
 # ==============================
 # Smart Update
@@ -104,10 +93,10 @@ def update_coin(data, coin, candles):
             all_c = {c["timestamp"]:c for c in row.get("candles",[])}
             for c in candles:
                 all_c[c["timestamp"]] = c
-            row["candles"] = sorted(all_c.values(), key=lambda x:x["timestamp"])[-90:]  # حفظ أكبر عدد شمعات
+            row["candles"] = sorted(all_c.values(), key=lambda x:x["timestamp"])
             save_github_data(data)
             return
-    data.append({"coin":coin,"candles":candles[-90:]})
+    data.append({"coin":coin,"candles":candles})
     save_github_data(data)
 
 # ==============================
@@ -116,8 +105,6 @@ def update_coin(data, coin, candles):
 def run_collector():
     st.info("⏳ تحديث آمن...")
     coins = get_coins()
-    if not coins:
-        return
     data = load_github_data()
 
     for i in range(0, len(coins), 10):
@@ -129,10 +116,9 @@ def run_collector():
                 if not should_update(data, symbol):
                     return None
 
-                d = fetch_data(c["id"], days=30)
+                d = fetch_data(c["id"])
                 prices = [p[1] for p in d.get("prices",[])]
                 vols = [v[1] for v in d.get("total_volumes",[])]
-
                 candles = []
                 for i in range(len(prices)):
                     candles.append({
@@ -140,7 +126,6 @@ def run_collector():
                         "price": float(prices[i]),
                         "volume": float(vols[i]) if i<len(vols) else 0
                     })
-
                 update_coin(data, symbol, candles)
                 return symbol
             except:
@@ -160,7 +145,7 @@ if st.button("🔄 تحديث"):
     run_collector()
 
 # ==============================
-# AI Analysis
+# AI + Analysis
 # ==============================
 data = load_github_data()
 rows = []
@@ -180,50 +165,14 @@ for coin_data in data:
         drop = ((prices[i] - prices[:i+1].max()) / prices[:i+1].max()) * 100
         avg_vol = vols[i-10:i].mean()
         volx = vols[i] / avg_vol if avg_vol>0 else 1
-
-        # ==============================
-        # مؤشرات إضافية
-        # ==============================
-        rsi_prev = calculate_rsi(prices[i-15:i])
-        rsi_cond = rsi < 35 and rsi > rsi_prev
-        recent_prices = prices[i-20:i]
-        support_zone = np.percentile(recent_prices, 20)
-        near_support = prices[i] <= support_zone * 1.1
-        ema_20 = pd.Series(prices[i-20:i]).ewm(span=20).mean().values
-        ema_cond = prices[i] > ema_20[-1]
-        higher_low = prices[i-5:i].min() < prices[i]
-        last = prices[i]
-        prev = prices[i-1]
-        prev2 = prices[i-2]
-        bullish_engulfing = (prev < prev2) and (last > prev) and (last > prev2)
-        body = abs(last - prev)
-        lower_shadow = abs(prev - prev2)
-        hammer = lower_shadow > body * 2
-        candle_signal = bullish_engulfing or hammer
-        strong_drop = drop < -40
-        bounce_started = last > prices[i-3]
-        smart_reversal = strong_drop and bounce_started
-
         score = 0
         if drop < -25: score += 2
-        if rsi_cond: score += 2
+        if rsi < 35: score += 2
         if volx > 1.5: score += 2
-        if near_support: score += 2
-        if ema_cond or higher_low: score += 2
-        if candle_signal: score += 2
-        if smart_reversal: score += 2
-
         target = 1 if prices[i+3] > prices[i] else 0
-
-        rows.append({
-            "coin": coin,
-            "rsi": rsi,
-            "score": score,
-            "target": target
-        })
+        rows.append({"coin": coin,"rsi": rsi,"score": score,"target": target})
 
 df_ai = pd.DataFrame(rows)
-
 if len(df_ai) > 20:
     X = df_ai[["rsi","score"]]
     y = df_ai["target"]
@@ -235,53 +184,33 @@ if len(df_ai) > 20:
     for coin_data in data:
         coin = coin_data["coin"]
         candles = coin_data.get("candles", [])
-        if len(candles) < 15:
-            continue
+        if len(candles) < 15: continue
         prices = np.array([c["price"] for c in candles])
         vols = np.array([c["volume"] for c in candles])
         rsi = calculate_rsi(prices[-15:])
         drop = ((prices[-1] - prices.max()) / prices.max()) * 100
         avg_vol = vols[-10:].mean()
         volx = vols[-1] / avg_vol if avg_vol>0 else 1
-        rsi_prev = calculate_rsi(prices[-16:-1])
-        rsi_cond = rsi < 35 and rsi > rsi_prev
-        recent_prices = prices[-20:]
-        support_zone = np.percentile(recent_prices, 20)
-        near_support = prices[-1] <= support_zone * 1.1
-        ema_20 = pd.Series(prices[-20:]).ewm(span=20).mean().values
-        ema_cond = prices[-1] > ema_20[-1]
-        higher_low = prices[-5:].min() < prices[-1]
-        last = prices[-1]
-        prev = prices[-2]
-        prev2 = prices[-3]
-        bullish_engulfing = (prev < prev2) and (last > prev) and (last > prev2)
-        body = abs(last - prev)
-        lower_shadow = abs(prev - prev2)
-        hammer = lower_shadow > body * 2
-        candle_signal = bullish_engulfing or hammer
-        strong_drop = drop < -40
-        bounce_started = last > prices[-3]
-        smart_reversal = strong_drop and bounce_started
         score = 0
         if drop < -25: score += 2
-        if rsi_cond: score += 2
+        if rsi < 35: score += 2
         if volx > 1.5: score += 2
-        if near_support: score += 2
-        if ema_cond or higher_low: score += 2
-        if candle_signal: score += 2
-        if smart_reversal: score += 2
-        if len(candles) >= 30:
-            status = "🟢 Good"
-        elif len(candles) >= 20:
-            status = "🟡 Moderate"
-        else:
-            status = "🔴 Low"
+
+        # ==============================
+        # Data Status
+        # ==============================
+        if len(candles) >= 30: status = "🟢 Good"
+        elif len(candles) >= 20: status = "🟡 Moderate"
+        else: status = "🔴 Low"
+
+        # ==============================
+        # Recommendation
+        # ==============================
         if score >= 6 or (score >= 4 and drop < -5):
             rec = "Strong Buy" if score >= 6 else "Buy"
-        elif score >= 3:
-            rec = "Hold"
-        else:
-            rec = "No"
+        elif score >= 3: rec = "Hold"
+        else: rec = "No"
+
         latest_rows.append({
             "Coin": coin,
             "Price (USD)": round(prices[-1],2),
@@ -300,36 +229,23 @@ if len(df_ai) > 20:
     # ==============================
     # مؤشر الخوف والطمع + حالة السوق العام
     # ==============================
-    def get_fear_greed_index():
-        try:
-            url = "https://api.alternative.me/fng/?limit=1"
-            r = requests.get(url).json()
-            value = int(r["data"][0]["value"])
-            if value < 40:
-                emoji = "😨"
-            elif value < 60:
-                emoji = "😐"
-            else:
-                emoji = "😎"
-            return value, emoji
-        except:
-            return None, ""
+    try:
+        fg = requests.get("https://api.alternative.me/fng/").json()
+        fg_value = fg["data"][0]["value"]
+        fg_status = fg["data"][0]["value_classification"]
+        if fg_value < 30: fg_emoji = "😨"
+        elif fg_value < 70: fg_emoji = "😐"
+        else: fg_emoji = "😎"
+    except:
+        fg_value, fg_status, fg_emoji = "N/A", "N/A", "❓"
 
-    def get_market_trend(latest_df):
-        if latest_df.empty:
-            return "❓"
-        avg_score = latest_df["Score"].mean()
-        if avg_score >= 7:
-            return "🚀 صاعد"
-        elif avg_score >= 4:
-            return "⏸️ عرضي"
-        else:
-            return "📉 هابط"
+    market_trend = "⏸️"  # افتراضي عرضي
+    avg_score = latest_df["Score"].mean() if not latest_df.empty else 0
+    if avg_score > 4: market_trend = "🚀"
+    elif avg_score < 2: market_trend = "📉"
 
-    fear_value, fear_emoji = get_fear_greed_index()
-    market_trend = get_market_trend(latest_df)
+    st.markdown(f"### Fear & Greed: {fg_value} {fg_emoji} | Market Trend: {market_trend}")
 
-    st.markdown(f"### مؤشر الخوف والطمع: {fear_value} {fear_emoji}   |   حالة السوق العام: {market_trend}")
     st.dataframe(latest_df, use_container_width=True)
 
 else:
