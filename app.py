@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from github import Github
+from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
@@ -20,7 +20,7 @@ REPO_NAME = st.secrets["GITHUB"]["REPO"]
 BRANCH = st.secrets["GITHUB"]["BRANCH"]
 FILE_PATH = "data.json"
 
-g = Github(GITHUB_TOKEN)
+g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
 # ==============================
@@ -31,7 +31,7 @@ def load_github_data():
         contents = repo.get_contents(FILE_PATH, ref=BRANCH)
         data = json.loads(contents.decoded_content.decode())
     except:
-        data = []  # file not exist yet
+        data = []
     return data
 
 def save_github_data(data):
@@ -59,20 +59,18 @@ def calculate_rsi(prices, period=14):
 # Collector functions
 # ==============================
 def get_coins_coingecko():
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
     try:
+        url = "https://api.coingecko.com/api/v3/coins/markets"
+        params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
         data = requests.get(url, params=params).json()
-        if isinstance(data, list):
-            return data
-        return []
+        return data if isinstance(data, list) else []
     except:
         return []
 
 def get_coins_cryptocompare():
-    url = "https://min-api.cryptocompare.com/data/top/mktcapfull"
-    params = {"limit":50,"tsym":"USD"}
     try:
+        url = "https://min-api.cryptocompare.com/data/top/mktcapfull"
+        params = {"limit":50,"tsym":"USD"}
         data = requests.get(url, params=params).json()
         coins = [{"id":coin["CoinInfo"]["Name"], "symbol":coin["CoinInfo"]["Name"].upper()} 
                  for coin in data.get("Data",[]) if "CoinInfo" in coin]
@@ -81,8 +79,8 @@ def get_coins_cryptocompare():
         return []
 
 def get_coins_binance():
-    url = "https://api.binance.com/api/v3/ticker/24hr"
     try:
+        url = "https://api.binance.com/api/v3/ticker/24hr"
         data = requests.get(url).json()
         coins = [{"id":coin["symbol"], "symbol":coin["symbol"]} 
                  for coin in data if "symbol" in coin and coin["symbol"].endswith("USDT")]
@@ -137,10 +135,11 @@ def update_github_row(data, coin, timestamp, price, drop, rsi, volume, volx, sup
         })
     save_github_data(data)
 
+# ==============================
+# Collector - تحديث كل العملات
+# ==============================
 def run_collector():
     st.info("⏳ جاري تحديث البيانات…")
-    
-    # اجمع العملات مع التأكد إنهم List
     coins = []
     for func in [get_coins_coingecko, get_coins_cryptocompare, get_coins_binance]:
         result = func()
@@ -176,116 +175,29 @@ def run_collector():
     st.success(f"✅ تم تحديث {updated_count} عملة على GitHub")
 
 # ==============================
-# Auto run every 10 minutes
+# تحديث العملة المحددة
 # ==============================
-if "last_run" not in st.session_state:
-    st.session_state.last_run = 0
-
-if time.time() - st.session_state.last_run > 600:
-    run_collector()
-    st.session_state.last_run = time.time()
-
-if st.button("🔄 تحديث البيانات"):
-    run_collector()
-
-# ==============================
-# Load data for display & AI
-# ==============================
-github_data = load_github_data()
-df = pd.DataFrame(github_data)
-
-if df.empty:
-    st.warning("⚠️ مفيش بيانات لعرضها دلوقتي")
-else:
-    df["target"] = (df["price"].shift(-3) > df["price"]).astype(int)
-    df_ai = df.dropna()
-
-    if len(df_ai) > 10:
-        X = df_ai[["rsi","score"]]
-        y = df_ai["target"]
-        model = RandomForestClassifier()
-        X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
-        model.fit(X_train,y_train)
-        acc = model.score(X_test,y_test)
-
-        latest = df.sort_values("timestamp").groupby("coin").tail(1)
-        X_latest = latest[["rsi","score"]]
+def update_single_coin(symbol):
+    github_data = load_github_data()
+    all_coins = []
+    for func in [get_coins_coingecko, get_coins_cryptocompare, get_coins_binance]:
+        result = func()
+        if isinstance(result, list):
+            all_coins += result
+    coin = next((c for c in all_coins if c["symbol"].upper() == symbol), None)
+    if coin:
         try:
-            probs = model.predict_proba(X_latest)[:,1]
-            latest["Chance %"] = probs * 100
-        except:
-            latest["Chance %"] = 0
-
-        # ==============================
-        # إشارات التداول
-        # ==============================
-        def get_signal(score):
-            if score >= 6:
-                return "🚀 شراء قوي"
-            elif score >= 4:
-                return "🔥 شراء"
-            elif score >= 2:
-                return "⏳ انتظار"
-            else:
-                return "❌ رفض"
-
-        latest["Signal"] = latest["score"].apply(get_signal)
-
-        # ==============================
-        # حالة البيانات
-        # ==============================
-        counts = df.groupby("coin").size()
-        def status_color(n):
-            if n >= 20:
-                return "🟩 كافي"
-            elif n >= 10:
-                return "🟨 متوسط"
-            else:
-                return "🟥 قليل"
-
-        latest["Data Status"] = latest["coin"].apply(lambda c: status_color(counts.get(c, 0)))
-        latest = latest.sort_values("Chance %", ascending=False)
-
-        st.success(f"دقة الموديل: {round(acc*100,2)}%")
-
-        display_df = latest[[
-            "coin","price","drop_percent","rsi","volx","support","score","Signal","Chance %","Data Status"
-        ]].rename(columns={
-            "coin": "العملة",
-            "price": "السعر",
-            "drop_percent": "% الهبوط",
-            "rsi": "RSI",
-            "volx": "Vol X",
-            "support": "الدعم",
-            "score": "Score",
-            "Signal": "الإشارة",
-            "Chance %": "احتمال الصعود %",
-            "Data Status": "حالة البيانات"
-        })
-
-        def color_signal(val):
-            if "شراء قوي" in val:
-                return "background-color: green; color: white"
-            elif "شراء" in val:
-                return "background-color: darkgreen; color: white"
-            elif "انتظار" in val:
-                return "background-color: orange"
-            else:
-                return ""  # بدون ظل أحمر
-
-        def color_data_status(val):
-            if "🟩" in val:
-                return "background-color: green; color: white"
-            elif "🟨" in val:
-                return "background-color: orange"
-            else:
-                return "background-color: lightgrey"  # بدل الأحمر
-
-        st.dataframe(
-            display_df.style
-            .applymap(color_signal, subset=["الإشارة"])
-            .applymap(color_data_status, subset=["حالة البيانات"]),
-            use_container_width=True
-        )
-    else:
-        st.warning("⚠️ البيانات غير كافية لتشغيل AI")
+            coin_id = coin["id"]
+            data = fetch_coin_data_daily(coin_id)
+            prices = np.array([p[1] for p in data.get("prices",[])])
+            volumes = np.array([v[1] for v in data.get("total_volumes",[])])
+            if len(prices) == 0: return
+            current_price = prices[-1]
+            max_price = prices.max()
+            drop = ((current_price - max_price)/max_price)*100
+            rsi = calculate_rsi(prices[-min(15,len(prices)):])
+            avg_vol = volumes[:-1].mean() if len(volumes)>1 else volumes[-1]
+            volx = volumes[-1]/avg_vol if avg_vol>0 else 1
+            support = np.percentile(prices[-min(20,len(prices)):],20)
+            score = calculate_score(current_price, drop, rsi, volx)
+            timestamp = int(data["prices"][-
