@@ -616,5 +616,25 @@
     {
         "coin": "QUQ",
         "candles": []
+    },
+    {
+        "coin": "AVAX",
+        "candles": []
+    },
+    {
+        "coin": "APT",
+        "candles": []
+    },
+    {
+        "coin": "AAVE",
+        "candles": []
+    },
+    {
+        "coin": "LTC",
+        "candles": []
+    },
+    {
+        "coin": "ASTER",
+        "candles": []
     }
 ]
