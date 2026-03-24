@@ -580,5 +580,21 @@
     {
         "coin": "LINK",
         "candles": []
+    },
+    {
+        "coin": "TAO",
+        "candles": []
+    },
+    {
+        "coin": "TRX",
+        "candles": []
+    },
+    {
+        "coin": "PAXG",
+        "candles": []
+    },
+    {
+        "coin": "ADA",
+        "candles": []
     }
 ]
