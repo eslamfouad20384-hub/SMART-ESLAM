@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO")
+st.title("🚀 Smart Crypto Scanner AI PRO - White Card Table")
 
 # ==============================
 # GitHub setup
@@ -24,7 +24,7 @@ g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
 # ==============================
-# GitHub
+# GitHub helpers
 # ==============================
 def load_github_data():
     try:
@@ -58,7 +58,7 @@ def calculate_rsi(prices, period=14):
     return 100 - (100 / (1+rs))
 
 # ==============================
-# CoinGecko
+# CoinGecko fetch
 # ==============================
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -71,7 +71,7 @@ def fetch_data(coin_id):
     return requests.get(url, params=params).json()
 
 # ==============================
-# Smart Update
+# Smart update
 # ==============================
 def should_update(data, coin):
     for row in data:
@@ -84,9 +84,6 @@ def should_update(data, coin):
                 return False
     return True
 
-# ==============================
-# Save candles
-# ==============================
 def update_coin(data, coin, candles):
     for row in data:
         if row["coin"] == coin:
@@ -103,7 +100,7 @@ def update_coin(data, coin, candles):
 # Collector
 # ==============================
 def run_collector():
-    st.info("⏳ تحديث آمن...")
+    st.info("⏳ تحديث البيانات...")
     coins = get_coins()
     data = load_github_data()
 
@@ -115,7 +112,6 @@ def run_collector():
                 symbol = c["symbol"].upper()
                 if not should_update(data, symbol):
                     return None
-
                 d = fetch_data(c["id"])
                 prices = [p[1] for p in d.get("prices",[])]
                 vols = [v[1] for v in d.get("total_volumes",[])]
@@ -123,8 +119,8 @@ def run_collector():
                 for i in range(len(prices)):
                     candles.append({
                         "timestamp": int(d["prices"][i][0]),
-                        "price": float(prices[i]),
-                        "volume": float(vols[i]) if i<len(vols) else 0
+                        "price": round(float(prices[i]),2),
+                        "volume": round(float(vols[i]) if i<len(vols) else 0,2)
                     })
                 update_coin(data, symbol, candles)
                 return symbol
@@ -135,16 +131,13 @@ def run_collector():
             ex.map(work, batch)
         time.sleep(2)
 
-    st.success("✅ تم التحديث بدون حظر")
+    st.success("✅ تم التحديث")
 
-# ==============================
-# زر التحديث
-# ==============================
 if st.button("🔄 تحديث"):
     run_collector()
 
 # ==============================
-# AI
+# AI prediction
 # ==============================
 data = load_github_data()
 rows = []
@@ -152,7 +145,6 @@ rows = []
 for coin_data in data:
     coin = coin_data["coin"]
     candles = coin_data.get("candles", [])
-
     if len(candles) < 15:
         continue
 
@@ -171,7 +163,7 @@ for coin_data in data:
         target = 1 if prices[i+3] > prices[i] else 0
         rows.append({
             "coin": coin,
-            "rsi": rsi,
+            "rsi": round(rsi,2),
             "score": score,
             "target": target
         })
@@ -186,33 +178,28 @@ if len(df_ai) > 20:
     X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
     model.fit(X_train,y_train)
 
-    # ==============================
-    # Latest prediction
-    # ==============================
     latest_rows = []
-
     for coin_data in data:
         coin = coin_data["coin"]
         candles = coin_data.get("candles", [])
-
         if len(candles) < 15:
             continue
 
         prices = np.array([c["price"] for c in candles])
         vols = np.array([c["volume"] for c in candles])
 
-        rsi = calculate_rsi(prices[-15:])
-        drop = ((prices[-1] - prices.max()) / prices.max()) * 100
+        rsi = round(calculate_rsi(prices[-15:]),2)
+        drop = round(((prices[-1]-prices.max())/prices.max())*100,2)
         avg_vol = vols[-10:].mean()
-        volx = vols[-1] / avg_vol if avg_vol>0 else 1
+        volx = round(vols[-1]/avg_vol if avg_vol>0 else 1,2)
         score = 0
-        if drop < -25: score += 2
-        if rsi < 35: score += 2
-        if volx > 1.5: score += 2
+        if drop < -25: score +=2
+        if rsi < 35: score +=2
+        if volx>1.5: score +=2
 
         latest_rows.append({
             "coin": coin,
-            "price": prices[-1],
+            "price": round(prices[-1],2),
             "drop": drop,
             "rsi": rsi,
             "volx": volx,
@@ -221,10 +208,10 @@ if len(df_ai) > 20:
 
     latest_df = pd.DataFrame(latest_rows)
     probs = model.predict_proba(latest_df[["rsi","score"]])[:,1]
-    latest_df["Chance %"] = probs * 100
+    latest_df["Chance %"] = (probs*100).round(2)
 
     # ==============================
-    # إشارات التداول + حالة البيانات + ترتيب
+    # الإشارة + حالة البيانات
     # ==============================
     def get_signal(score):
         if score >= 6:
@@ -261,7 +248,7 @@ if len(df_ai) > 20:
         "Signal": "الإشارة",
         "Chance %": "احتمال الصعود %",
         "Data Status": "حالة البيانات"
-    })
+    }).sort_values("احتمال الصعود %", ascending=False)
 
     # ==============================
     # ألوان الجدول
@@ -277,17 +264,19 @@ if len(df_ai) > 20:
             return ""
 
     def color_data(val):
+        # مجرد بطاقة صغيرة، الجدول كله أبيض
         if "🟩" in val:
-            return "background-color: green; color: white"
+            return "border:2px solid green; font-weight:bold; text-align:center"
         elif "🟨" in val:
-            return "background-color: orange"
+            return "border:2px solid orange; font-weight:bold; text-align:center"
         else:
-            return "background-color: lightblue"
+            return "border:2px solid lightblue; font-weight:bold; text-align:center"
 
     st.dataframe(
         display_df.style
-        .map(color_signal, subset=["الإشارة"])
-        .map(color_data, subset=["حالة البيانات"]),
+        .applymap(lambda _: "background-color: white; color: black")  # الخلفية أبيض لكل الجدول
+        .applymap(color_signal, subset=["الإشارة"])
+        .applymap(color_data, subset=["حالة البيانات"]),
         use_container_width=True
     )
 
