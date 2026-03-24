@@ -612,5 +612,9 @@
     {
         "coin": "ZEC",
         "candles": []
+    },
+    {
+        "coin": "QUQ",
+        "candles": []
     }
 ]
