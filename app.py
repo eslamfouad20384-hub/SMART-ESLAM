@@ -217,21 +217,39 @@ if len(df_ai) > 20:
         if rsi < 35: score += 2
         if volx > 1.5: score += 2
 
+        # ==============================
+        # Data Status
+        # ==============================
+        if len(candles) >= 30:
+            status = "🟢 Good"
+        elif len(candles) >= 20:
+            status = "🟡 Moderate"
+        else:
+            status = "🔴 Low"
+
+        # ==============================
+        # Recommendation
+        # ==============================
+        if score >= 6 or (score >= 4 and drop < -5):
+            rec = "Strong Buy" if score >= 6 else "Buy"
+        elif score >= 3:
+            rec = "Hold"
+        else:
+            rec = "No"
+
         latest_rows.append({
-            "coin": coin,
-            "price": prices[-1],
-            "drop": drop,
-            "rsi": rsi,
-            "volx": volx,
-            "score": score
+            "Coin": coin,
+            "Price (USD)": round(prices[-1],2),
+            "Drop %": round(drop,2),
+            "RSI": round(rsi,2),
+            "Volume x": round(volx,2),
+            "Score": score,
+            "Chance %": round(model.predict_proba([[rsi,score]])[0][1]*100,2),
+            "Recommendation": rec,
+            "Data Status": status
         })
 
     latest_df = pd.DataFrame(latest_rows)
-
-    probs = model.predict_proba(latest_df[["rsi","score"]])[:,1]
-    latest_df["Chance %"] = probs * 100
-
-    # 🔥 الترتيب حسب أقوى فرصة
     latest_df = latest_df.sort_values("Chance %", ascending=False)
 
     st.dataframe(latest_df, use_container_width=True)
