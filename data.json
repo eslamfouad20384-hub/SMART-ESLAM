@@ -676,5 +676,41 @@
     {
         "coin": "BTR",
         "candles": []
+    },
+    {
+        "coin": "RLUSD",
+        "candles": []
+    },
+    {
+        "coin": "ONT",
+        "candles": []
+    },
+    {
+        "coin": "RENDER",
+        "candles": []
+    },
+    {
+        "coin": "XMR",
+        "candles": []
+    },
+    {
+        "coin": "XLM",
+        "candles": []
+    },
+    {
+        "coin": "JTO",
+        "candles": []
+    },
+    {
+        "coin": "WLFI",
+        "candles": []
+    },
+    {
+        "coin": "ZRO",
+        "candles": []
+    },
+    {
+        "coin": "FIL",
+        "candles": []
     }
 ]
