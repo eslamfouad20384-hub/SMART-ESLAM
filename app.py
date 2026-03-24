@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Scanner AI")
+st.title("🚀 Smart Crypto Scanner AI PRO")
 
 # ==============================
 # GitHub setup
@@ -24,7 +24,7 @@ g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
 # ==============================
-# GitHub helpers
+# GitHub
 # ==============================
 def load_github_data():
     try:
@@ -58,7 +58,7 @@ def calculate_rsi(prices, period=14):
     return 100 - (100 / (1+rs))
 
 # ==============================
-# CoinGecko fetch
+# CoinGecko
 # ==============================
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -71,7 +71,7 @@ def fetch_data(coin_id):
     return requests.get(url, params=params).json()
 
 # ==============================
-# Smart update
+# Smart Update
 # ==============================
 def should_update(data, coin):
     for row in data:
@@ -84,6 +84,9 @@ def should_update(data, coin):
                 return False
     return True
 
+# ==============================
+# Save candles
+# ==============================
 def update_coin(data, coin, candles):
     for row in data:
         if row["coin"] == coin:
@@ -100,7 +103,7 @@ def update_coin(data, coin, candles):
 # Collector
 # ==============================
 def run_collector():
-    st.info("⏳ تحديث البيانات...")
+    st.info("⏳ تحديث آمن...")
     coins = get_coins()
     data = load_github_data()
 
@@ -112,16 +115,19 @@ def run_collector():
                 symbol = c["symbol"].upper()
                 if not should_update(data, symbol):
                     return None
+
                 d = fetch_data(c["id"])
                 prices = [p[1] for p in d.get("prices",[])]
                 vols = [v[1] for v in d.get("total_volumes",[])]
+
                 candles = []
                 for i in range(len(prices)):
                     candles.append({
                         "timestamp": int(d["prices"][i][0]),
-                        "price": round(float(prices[i]),2),
-                        "volume": round(float(vols[i]) if i<len(vols) else 0,2)
+                        "price": float(prices[i]),
+                        "volume": float(vols[i]) if i<len(vols) else 0
                     })
+
                 update_coin(data, symbol, candles)
                 return symbol
             except:
@@ -129,15 +135,19 @@ def run_collector():
 
         with ThreadPoolExecutor(max_workers=5) as ex:
             ex.map(work, batch)
+
         time.sleep(2)
 
-    st.success("✅ تم التحديث")
+    st.success("✅ تم التحديث بدون حظر")
 
+# ==============================
+# زر التحديث
+# ==============================
 if st.button("🔄 تحديث"):
     run_collector()
 
 # ==============================
-# AI prediction
+# AI
 # ==============================
 data = load_github_data()
 rows = []
@@ -145,6 +155,7 @@ rows = []
 for coin_data in data:
     coin = coin_data["coin"]
     candles = coin_data.get("candles", [])
+
     if len(candles) < 15:
         continue
 
@@ -156,14 +167,17 @@ for coin_data in data:
         drop = ((prices[i] - prices[:i+1].max()) / prices[:i+1].max()) * 100
         avg_vol = vols[i-10:i].mean()
         volx = vols[i] / avg_vol if avg_vol>0 else 1
+
         score = 0
         if drop < -25: score += 2
         if rsi < 35: score += 2
         if volx > 1.5: score += 2
+
         target = 1 if prices[i+3] > prices[i] else 0
+
         rows.append({
             "coin": coin,
-            "rsi": round(rsi,2),
+            "rsi": rsi,
             "score": score,
             "target": target
         })
@@ -178,107 +192,49 @@ if len(df_ai) > 20:
     X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
     model.fit(X_train,y_train)
 
+    # ==============================
+    # Latest prediction
+    # ==============================
     latest_rows = []
+
     for coin_data in data:
         coin = coin_data["coin"]
         candles = coin_data.get("candles", [])
+
         if len(candles) < 15:
             continue
 
         prices = np.array([c["price"] for c in candles])
         vols = np.array([c["volume"] for c in candles])
 
-        rsi = round(calculate_rsi(prices[-15:]),2)
-        drop = round(((prices[-1]-prices.max())/prices.max())*100,2)
+        rsi = calculate_rsi(prices[-15:])
+        drop = ((prices[-1] - prices.max()) / prices.max()) * 100
         avg_vol = vols[-10:].mean()
-        volx = round(vols[-1]/avg_vol if avg_vol>0 else 1,2)
+        volx = vols[-1] / avg_vol if avg_vol>0 else 1
+
         score = 0
-        if drop < -25: score +=2
-        if rsi < 35: score +=2
-        if volx>1.5: score +=2
+        if drop < -25: score += 2
+        if rsi < 35: score += 2
+        if volx > 1.5: score += 2
 
         latest_rows.append({
             "coin": coin,
-            "price": round(prices[-1],2),
-            "drop": round(drop,2),
-            "rsi": round(rsi,2),
-            "volx": round(volx,2),
+            "price": prices[-1],
+            "drop": drop,
+            "rsi": rsi,
+            "volx": volx,
             "score": score
         })
 
     latest_df = pd.DataFrame(latest_rows)
+
     probs = model.predict_proba(latest_df[["rsi","score"]])[:,1]
-    latest_df["Chance %"] = (probs*100).round(2)
+    latest_df["Chance %"] = probs * 100
 
-    # ==============================
-    # الإشارة + حالة البيانات
-    # ==============================
-    def get_signal(score):
-        if score >= 6:
-            return "🚀 شراء قوي"
-        elif score >= 4:
-            return "🔥 شراء"
-        elif score >= 2:
-            return "⏳ انتظار"
-        else:
-            return "❌ رفض"
+    # 🔥 الترتيب حسب أقوى فرصة
+    latest_df = latest_df.sort_values("Chance %", ascending=False)
 
-    latest_df["Signal"] = latest_df["score"].apply(get_signal)
-
-    def data_status(candles_count):
-        if candles_count >= 25:
-            return "🟩 كافي"
-        elif candles_count >= 15:
-            return "🟨 متوسط"
-        else:
-            return "🟦 ضعيف"
-
-    counts = {d["coin"]: len(d.get("candles", [])) for d in data}
-    latest_df["Data Status"] = latest_df["coin"].apply(lambda c: data_status(counts.get(c,0)))
-
-    display_df = latest_df[[
-        "coin","price","drop","rsi","volx","score","Signal","Chance %","Data Status"
-    ]].rename(columns={
-        "coin": "العملة",
-        "price": "السعر",
-        "drop": "% الهبوط",
-        "rsi": "RSI",
-        "volx": "Vol X",
-        "score": "Score",
-        "Signal": "الإشارة",
-        "Chance %": "احتمال الصعود %",
-        "Data Status": "حالة البيانات"
-    }).sort_values("احتمال الصعود %", ascending=False)
-
-    # ==============================
-    # ألوان الجدول
-    # ==============================
-    def color_signal(val):
-        if "شراء قوي" in val:
-            return "background-color: green; color: white"
-        elif "شراء" in val:
-            return "background-color: darkgreen; color: white"
-        elif "انتظار" in val:
-            return "background-color: orange"
-        else:
-            return ""
-
-    def color_data(val):
-        # مجرد بطاقة صغيرة، الجدول كله أبيض
-        if "🟩" in val:
-            return "border:2px solid green; font-weight:bold; text-align:center"
-        elif "🟨" in val:
-            return "border:2px solid orange; font-weight:bold; text-align:center"
-        else:
-            return "border:2px solid lightblue; font-weight:bold; text-align:center"
-
-    st.dataframe(
-        display_df.style
-        .applymap(lambda _: "background-color: white; color: black")  # الخلفية أبيض لكل الجدول
-        .applymap(color_signal, subset=["الإشارة"])
-        .applymap(color_data, subset=["حالة البيانات"]),
-        use_container_width=True
-    )
+    st.dataframe(latest_df, use_container_width=True)
 
 else:
     st.warning("⚠️ البيانات غير كافية للـ AI")
