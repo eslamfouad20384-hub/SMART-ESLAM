@@ -119,7 +119,6 @@ def run_collector():
                 d = fetch_data(c["id"])
                 prices = [p[1] for p in d.get("prices",[])]
                 vols = [v[1] for v in d.get("total_volumes",[])]
-
                 candles = []
                 for i in range(len(prices)):
                     candles.append({
@@ -127,7 +126,6 @@ def run_collector():
                         "price": float(prices[i]),
                         "volume": float(vols[i]) if i<len(vols) else 0
                     })
-
                 update_coin(data, symbol, candles)
                 return symbol
             except:
@@ -135,7 +133,6 @@ def run_collector():
 
         with ThreadPoolExecutor(max_workers=5) as ex:
             ex.map(work, batch)
-
         time.sleep(2)
 
     st.success("✅ تم التحديث بدون حظر")
@@ -167,14 +164,11 @@ for coin_data in data:
         drop = ((prices[i] - prices[:i+1].max()) / prices[:i+1].max()) * 100
         avg_vol = vols[i-10:i].mean()
         volx = vols[i] / avg_vol if avg_vol>0 else 1
-
         score = 0
         if drop < -25: score += 2
         if rsi < 35: score += 2
         if volx > 1.5: score += 2
-
         target = 1 if prices[i+3] > prices[i] else 0
-
         rows.append({
             "coin": coin,
             "rsi": rsi,
@@ -211,7 +205,6 @@ if len(df_ai) > 20:
         drop = ((prices[-1] - prices.max()) / prices.max()) * 100
         avg_vol = vols[-10:].mean()
         volx = vols[-1] / avg_vol if avg_vol>0 else 1
-
         score = 0
         if drop < -25: score += 2
         if rsi < 35: score += 2
@@ -227,14 +220,76 @@ if len(df_ai) > 20:
         })
 
     latest_df = pd.DataFrame(latest_rows)
-
     probs = model.predict_proba(latest_df[["rsi","score"]])[:,1]
     latest_df["Chance %"] = probs * 100
 
-    # 🔥 الترتيب حسب أقوى فرصة
-    latest_df = latest_df.sort_values("Chance %", ascending=False)
+    # ==============================
+    # إشارات التداول + حالة البيانات + ترتيب
+    # ==============================
+    def get_signal(score):
+        if score >= 6:
+            return "🚀 شراء قوي"
+        elif score >= 4:
+            return "🔥 شراء"
+        elif score >= 2:
+            return "⏳ انتظار"
+        else:
+            return "❌ رفض"
 
-    st.dataframe(latest_df, use_container_width=True)
+    latest_df["Signal"] = latest_df["score"].apply(get_signal)
+
+    def data_status(candles_count):
+        if candles_count >= 25:
+            return "🟩 كافي"
+        elif candles_count >= 15:
+            return "🟨 متوسط"
+        else:
+            return "🟦 ضعيف"
+
+    counts = {d["coin"]: len(d.get("candles", [])) for d in data}
+    latest_df["Data Status"] = latest_df["coin"].apply(lambda c: data_status(counts.get(c,0)))
+
+    display_df = latest_df[[
+        "coin","price","drop","rsi","volx","score","Signal","Chance %","Data Status"
+    ]].rename(columns={
+        "coin": "العملة",
+        "price": "السعر",
+        "drop": "% الهبوط",
+        "rsi": "RSI",
+        "volx": "Vol X",
+        "score": "Score",
+        "Signal": "الإشارة",
+        "Chance %": "احتمال الصعود %",
+        "Data Status": "حالة البيانات"
+    })
+
+    # ==============================
+    # ألوان الجدول
+    # ==============================
+    def color_signal(val):
+        if "شراء قوي" in val:
+            return "background-color: green; color: white"
+        elif "شراء" in val:
+            return "background-color: darkgreen; color: white"
+        elif "انتظار" in val:
+            return "background-color: orange"
+        else:
+            return ""
+
+    def color_data(val):
+        if "🟩" in val:
+            return "background-color: green; color: white"
+        elif "🟨" in val:
+            return "background-color: orange"
+        else:
+            return "background-color: lightblue"
+
+    st.dataframe(
+        display_df.style
+        .map(color_signal, subset=["الإشارة"])
+        .map(color_data, subset=["حالة البيانات"]),
+        use_container_width=True
+    )
 
 else:
     st.warning("⚠️ البيانات غير كافية للـ AI")
