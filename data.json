@@ -19842,5 +19842,9 @@
     {
         "coin": "PYUSD",
         "candles": []
+    },
+    {
+        "coin": "SAHARA",
+        "candles": []
     }
 ]
