@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO - White Card Table")
+st.title("🚀 Scanner AI")
 
 # ==============================
 # GitHub setup
@@ -200,9 +200,9 @@ if len(df_ai) > 20:
         latest_rows.append({
             "coin": coin,
             "price": round(prices[-1],2),
-            "drop": drop,
-            "rsi": rsi,
-            "volx": volx,
+            "drop": round(drop,2),
+            "rsi": round(rsi,2),
+            "volx": round(volx,2),
             "score": score
         })
 
