@@ -1032,5 +1032,9 @@
     {
         "coin": "USAD",
         "candles": []
+    },
+    {
+        "coin": "RUSD",
+        "candles": []
     }
 ]
