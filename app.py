@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO")
+st.title("🚀 Scanner AI")
 
 # ==============================
 # GitHub setup
@@ -251,6 +251,41 @@ if len(df_ai) > 20:
 
     latest_df = pd.DataFrame(latest_rows)
     latest_df = latest_df.sort_values("Chance %", ascending=False)
+
+    # ==============================
+    # مؤشر الخوف والطمع وحالة السوق العام
+    # ==============================
+    def get_fear_greed_index():
+        # مثال ثابت، ممكن تجيب من API
+        value = 72
+        if value <= 25:
+            emoji = "😨"
+        elif value <= 74:
+            emoji = "😐"
+        else:
+            emoji = "😎"
+        return value, emoji
+
+    def get_market_trend():
+        # مثال ثابت
+        trend = "Up"
+        if trend == "Up":
+            color = "🟢"
+        elif trend == "Side":
+            color = "🟡"
+        else:
+            color = "🔴"
+        return trend, color
+
+    fear_value, fear_emoji = get_fear_greed_index()
+    trend_text, trend_color = get_market_trend()
+
+    st.markdown(f"""
+    <div style='display:flex; align-items:center; gap:20px; margin-bottom:10px;'>
+        <div style='font-size:20px;'>Fear & Greed Index: {fear_value} {fear_emoji}</div>
+        <div style='font-size:20px;'>Market: {trend_color} {trend_text}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.dataframe(latest_df, use_container_width=True)
 
