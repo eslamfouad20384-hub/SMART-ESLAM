@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Scanner AI")
+st.title("🚀 Smart Crypto Scanner AI PRO")
 
 # ==============================
 # GitHub setup
@@ -65,9 +65,9 @@ def get_coins():
     params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
     return requests.get(url, params=params).json()
 
-def fetch_data(coin_id):
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    params = {"vs_currency":"usd","days":30}
+def fetch_data_range(coin_id, from_ts, to_ts):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart/range"
+    params = {"vs_currency":"usd", "from":from_ts, "to":to_ts}
     return requests.get(url, params=params).json()
 
 # ==============================
@@ -87,16 +87,17 @@ def should_update(data, coin):
 # ==============================
 # Save candles
 # ==============================
-def update_coin(data, coin, candles):
+def update_coin(data, coin, new_candles):
     for row in data:
         if row["coin"] == coin:
+            # احتفاظ بكل الشمعات القديمة وإضافة الجديدة
             all_c = {c["timestamp"]:c for c in row.get("candles",[])}
-            for c in candles:
+            for c in new_candles:
                 all_c[c["timestamp"]] = c
-            row["candles"] = sorted(all_c.values(), key=lambda x:x["timestamp"])[-30:]
+            row["candles"] = sorted(all_c.values(), key=lambda x:x["timestamp"])
             save_github_data(data)
             return
-    data.append({"coin":coin,"candles":candles[-30:]})
+    data.append({"coin":coin,"candles":new_candles})
     save_github_data(data)
 
 # ==============================
@@ -116,7 +117,18 @@ def run_collector():
                 if not should_update(data, symbol):
                     return None
 
-                d = fetch_data(c["id"])
+                # ==============================
+                # تحديد الفترة حسب آخر شمعة موجودة
+                # ==============================
+                existing_row = next((r for r in data if r["coin"]==symbol), None)
+                if existing_row and existing_row.get("candles"):
+                    last_timestamp = max(c["timestamp"] for c in existing_row["candles"])
+                    start_ts = last_timestamp / 1000 + 1  # من بعد آخر شمعة
+                else:
+                    start_ts = time.time() - 30*24*60*60  # أول مرة: آخر 30 يوم
+                end_ts = time.time()
+
+                d = fetch_data_range(c["id"], start_ts, end_ts)
                 prices = [p[1] for p in d.get("prices",[])]
                 vols = [v[1] for v in d.get("total_volumes",[])]
 
@@ -256,7 +268,6 @@ if len(df_ai) > 20:
     # مؤشر الخوف والطمع وحالة السوق العام
     # ==============================
     def get_fear_greed_index():
-        # مثال ثابت، ممكن تجيب من API
         value = 72
         if value <= 25:
             emoji = "😨"
@@ -267,7 +278,6 @@ if len(df_ai) > 20:
         return value, emoji
 
     def get_market_trend():
-        # مثال ثابت
         trend = "Up"
         if trend == "Up":
             color = "🟢"
