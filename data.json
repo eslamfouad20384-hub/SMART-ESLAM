@@ -19846,5 +19846,9 @@
     {
         "coin": "SAHARA",
         "candles": []
+    },
+    {
+        "coin": "VIRTUAL",
+        "candles": []
     }
 ]
