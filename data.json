@@ -572,5 +572,13 @@
     {
         "coin": "NIGHT",
         "candles": []
+    },
+    {
+        "coin": "XAUT",
+        "candles": []
+    },
+    {
+        "coin": "LINK",
+        "candles": []
     }
 ]
