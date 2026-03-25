@@ -123,7 +123,7 @@ def run_collector():
 # ==============================
 # مصدر مجاني جديد: Messari Free API Top 50 + Blacklist
 # ==============================
-BLACKLIST = ["USDT", "USDC", "USD1", "BNB", "SOLANA", "BTC", "ETH", "XRP"]
+BLACKLIST = ["BNB", "SOLANA", "BTC", "ETH", "XRP"]
 
 def get_messari_coins():
     url = "https://data.messari.io/api/v2/assets"
