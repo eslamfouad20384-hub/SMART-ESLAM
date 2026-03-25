@@ -18293,5 +18293,9 @@
     {
         "coin": "BNB",
         "candles": []
+    },
+    {
+        "coin": "SAHARA",
+        "candles": []
     }
 ]
