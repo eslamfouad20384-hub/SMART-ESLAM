@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (Enhanced)")
 
 # ==============================
 # 🎨 Dark Mode Table
@@ -62,23 +62,32 @@ def save_github_data(data):
         repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
 
 # ==============================
-# RSI (EMA improved)
+# Indicators
 # ==============================
 def calculate_rsi(prices, period=14):
     delta = np.diff(prices)
     gain = np.where(delta > 0, delta, 0)
     loss = np.where(delta < 0, -delta, 0)
-
     avg_gain = pd.Series(gain).ewm(alpha=1/period).mean()
     avg_loss = pd.Series(loss).ewm(alpha=1/period).mean()
-
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     return rsi.iloc[-1]
 
-# ==============================
-# Support / Resistance
-# ==============================
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    ema_fast = pd.Series(prices).ewm(span=fast, adjust=False).mean()
+    ema_slow = pd.Series(prices).ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line.iloc[-1], signal_line.iloc[-1]
+
+def calculate_bollinger(prices, period=20, mult=2):
+    sma = pd.Series(prices).rolling(window=period).mean()
+    std = pd.Series(prices).rolling(window=period).std()
+    upper = sma + mult*std
+    lower = sma - mult*std
+    return upper.iloc[-1], lower.iloc[-1]
+
 def get_support_resistance(prices):
     support = np.min(prices[-20:])
     resistance = np.max(prices[-20:])
@@ -177,7 +186,7 @@ data = load_github_data()
 rows = []
 
 # ==============================
-# Prepare AI dataset
+# Prepare AI dataset with enhanced features
 # ==============================
 for coin_data in data:
     candles = coin_data.get("candles", [])
@@ -193,12 +202,18 @@ for coin_data in data:
         avg_vol = vols[i-10:i].mean()
         volx = vols[i] / avg_vol if avg_vol>0 else 1
         change = ((prices[i] - prices[i-3]) / prices[i-3]) * 100
+        macd_line, signal_line = calculate_macd(prices[i-26:i]) if i>=26 else (0,0)
+        upper_bb, lower_bb = calculate_bollinger(prices[i-20:i]) if i>=20 else (0,0)
+        sma_short = pd.Series(prices[i-10:i]).mean()
+        sma_long = pd.Series(prices[i-30:i]).mean() if i>=30 else sma_short
 
         score = 0
         if rsi < 35: score += 3
         if drop < -20: score += 3
         if volx > 1.5: score += 2
         if change > 0: score += 2
+        if macd_line > signal_line: score +=1
+        if prices[i] < lower_bb: score +=1
 
         target = 1 if prices[i+3] > prices[i] else 0
 
@@ -207,6 +222,10 @@ for coin_data in data:
             "drop": drop,
             "volx": volx,
             "change": change,
+            "macd_diff": macd_line - signal_line,
+            "bb_lower_diff": prices[i] - lower_bb,
+            "sma_short": sma_short,
+            "sma_long": sma_long,
             "score": score,
             "target": target
         })
@@ -217,10 +236,10 @@ df_ai = pd.DataFrame(rows)
 # Train AI
 # ==============================
 if len(df_ai) > 50:
-    X = df_ai[["rsi","drop","volx","change","score"]]
+    X = df_ai[["rsi","drop","volx","change","macd_diff","bb_lower_diff","sma_short","sma_long","score"]]
     y = df_ai["target"]
 
-    model = RandomForestClassifier(n_estimators=100)
+    model = RandomForestClassifier(n_estimators=200)
     X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
     model.fit(X_train,y_train)
 
@@ -241,7 +260,10 @@ if len(df_ai) > 50:
         avg_vol = vols[-10:].mean()
         volx = vols[-1] / avg_vol if avg_vol>0 else 1
         change = ((prices[-1] - prices[-3]) / prices[-3]) * 100
-
+        macd_line, signal_line = calculate_macd(prices[-26:]) if len(prices)>=26 else (0,0)
+        upper_bb, lower_bb = calculate_bollinger(prices[-20:]) if len(prices)>=20 else (0,0)
+        sma_short = pd.Series(prices[-10:]).mean()
+        sma_long = pd.Series(prices[-30:]).mean() if len(prices)>=30 else sma_short
         support, resistance = get_support_resistance(prices)
 
         score = 0
@@ -249,6 +271,8 @@ if len(df_ai) > 50:
         if drop < -20: score += 3
         if volx > 1.5: score += 2
         if change > 0: score += 2
+        if macd_line > signal_line: score +=1
+        if prices[-1] < lower_bb: score +=1
 
         # Data Status
         if len(candles) >= 30:
@@ -259,7 +283,7 @@ if len(df_ai) > 50:
             data_status = "🔴 Low"
 
         # Signal
-        if score >= 7:
+        if score >= 8:
             signal = "🔥 Strong Buy"
         elif score >= 5:
             signal = "🚀 Buy"
@@ -268,7 +292,7 @@ if len(df_ai) > 50:
         else:
             signal = "❌ No Trade"
 
-        chance = model.predict_proba([[rsi,drop,volx,change,score]])[0][1]*100
+        chance = model.predict_proba([[rsi,drop,volx,change,macd_line-signal_line,prices[-1]-lower_bb,sma_short,sma_long,score]])[0][1]*100
 
         latest_rows.append({
             "Coin": coin,
@@ -286,7 +310,6 @@ if len(df_ai) > 50:
 
     df = pd.DataFrame(latest_rows)
     df = df.sort_values("Chance %", ascending=False)
-
     st.dataframe(df, use_container_width=True)
 
 else:
