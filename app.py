@@ -121,18 +121,18 @@ def run_collector():
     st.success("✅ CoinGecko تم التحديث بدون حظر")
 
 # ==============================
-# مصدر مجاني جديد: Coinpaprika Top 50 + Blacklist
+# مصدر مجاني جديد: Messari Free API Top 50 + Blacklist
 # ==============================
 BLACKLIST = ["USDT", "USDC", "USD1", "BNB", "SOLANA", "BTC", "ETH", "XRP"]
 
-def get_coinpaprika_coins():
-    url = "https://api.coinpaprika.com/v1/tickers"
+def get_messari_coins():
+    url = "https://data.messari.io/api/v2/assets"
     try:
         data = requests.get(url).json()
     except:
         return []
     coins = []
-    for c in data:
+    for c in data.get("data", []):
         symbol = c.get("symbol")
         if not symbol:
             continue
@@ -144,30 +144,31 @@ def get_coinpaprika_coins():
             break
     return coins
 
-def fetch_coinpaprika_data(symbol):
-    url = f"https://api.coinpaprika.com/v1/tickers/{symbol.lower()}/historical?start=2023-01-01&interval=1h"
+def fetch_messari_data(symbol):
+    url = f"https://data.messari.io/api/v2/assets/{symbol}/metrics/market-data"
     try:
-        data = requests.get(url).json()
+        d = requests.get(url).json()
         candles = []
-        for d in data:
-            candles.append({
-                "timestamp": int(time.time()*1000),
-                "price": float(d.get("price", 0)),
-                "volume": float(d.get("volume", 0))
-            })
+        price = d.get("data", {}).get("market_data", {}).get("price_usd", 0)
+        volume = d.get("data", {}).get("market_data", {}).get("volume_last_24_hours", 0)
+        candles.append({
+            "timestamp": int(time.time()*1000),
+            "price": float(price),
+            "volume": float(volume)
+        })
         return candles
     except:
         return []
 
-def run_coinpaprika_collector():
-    st.info("⏳ تحديث Coinpaprika Top 50 مع استثناءات...")
+def run_messari_collector():
+    st.info("⏳ تحديث Messari Top 50 مع استثناءات...")
     data = load_github_data()
-    coins = get_coinpaprika_coins()
+    coins = get_messari_coins()
     for symbol in coins:
         try:
             if not should_update(data, symbol):
                 continue
-            candles = fetch_coinpaprika_data(symbol)
+            candles = fetch_messari_data(symbol)
             found = False
             for row in data:
                 if row["coin"] == symbol:
@@ -179,7 +180,7 @@ def run_coinpaprika_collector():
         except Exception as e:
             print(e)
     save_github_data(data)
-    st.success("✅ Coinpaprika Top 50 تم التحديث مع استثناءات")
+    st.success("✅ Messari Top 50 تم التحديث مع استثناءات")
 
 # ==============================
 # أزرار التحديث
@@ -189,8 +190,8 @@ with col1:
     if st.button("🔄 تحديث CoinGecko"):
         run_collector()
 with col2:
-    if st.button("🔥 تحديث Coinpaprika Top 50"):
-        run_coinpaprika_collector()
+    if st.button("🔥 تحديث Messari Top 50"):
+        run_messari_collector()
 with col3:
     st.markdown("✅ Blacklist: " + ", ".join(BLACKLIST))
 
@@ -203,41 +204,42 @@ rows = []
 for coin_data in data:
     coin = coin_data["coin"]
     candles = coin_data.get("candles", [])
-    if len(candles) < 15:
+    if len(candles) < 1:
         continue
 
     prices = np.array([c["price"] for c in candles])
     vols = np.array([c["volume"] for c in candles])
-    for i in range(14, len(candles)-3):
-        rsi = calculate_rsi(prices[i-14:i+1])
+    for i in range(min(14, len(candles)-1), len(candles)-1):
+        rsi = calculate_rsi(prices[max(0,i-14):i+1])
         drop = ((prices[i] - prices[:i+1].max()) / prices[:i+1].max()) * 100
-        avg_vol = vols[i-10:i].mean()
+        avg_vol = vols[max(0,i-10):i].mean() if i>0 else 1
         volx = vols[i] / avg_vol if avg_vol>0 else 1
         score = 0
         if drop < -25: score += 2
         if rsi < 35: score += 2
         if volx > 1.5: score += 2
-        target = 1 if prices[i+3] > prices[i] else 0
+        target = 1 if prices[i+1] > prices[i] else 0
         rows.append({"coin": coin,"rsi": rsi,"score": score,"target": target})
 
 df_ai = pd.DataFrame(rows)
-if len(df_ai) > 20:
+if len(df_ai) > 0:
     X = df_ai[["rsi","score"]]
     y = df_ai["target"]
     model = RandomForestClassifier()
-    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
-    model.fit(X_train,y_train)
+    if len(df_ai) > 1:
+        X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
+        model.fit(X_train,y_train)
 
     latest_rows = []
     for coin_data in data:
         coin = coin_data["coin"]
         candles = coin_data.get("candles", [])
-        if len(candles) < 15: continue
+        if len(candles) < 1: continue
         prices = np.array([c["price"] for c in candles])
         vols = np.array([c["volume"] for c in candles])
         rsi = calculate_rsi(prices[-15:])
         drop = ((prices[-1] - prices.max()) / prices.max()) * 100
-        avg_vol = vols[-10:].mean()
+        avg_vol = vols[-10:].mean() if len(vols)>=10 else vols.mean()
         volx = vols[-1] / avg_vol if avg_vol>0 else 1
         score = 0
         if drop < -25: score += 2
@@ -260,37 +262,13 @@ if len(df_ai) > 20:
             "RSI": round(rsi,2),
             "Volume x": round(volx,2),
             "Score": score,
-            "Chance %": round(model.predict_proba([[rsi,score]])[0][1]*100,2),
+            "Chance %": round(model.predict_proba([[rsi,score]])[0][1]*100,2) if len(df_ai) > 1 else 0,
             "Signal": rec,
             "Data": status
         })
 
     latest_df = pd.DataFrame(latest_rows)
     latest_df = latest_df.sort_values("Chance %", ascending=False)
-
-    # ==============================
-    # Fear & Greed + Market Trend
-    # ==============================
-    try:
-        fg = requests.get("https://api.alternative.me/fng/").json()
-        fg_value = fg["data"][0]["value"]
-        fg_status = fg["data"][0]["value_classification"]
-        if fg_value < 30: fg_emoji = "😨"
-        elif fg_value < 70: fg_emoji = "😐"
-        else: fg_emoji = "😎"
-    except:
-        fg_value, fg_status, fg_emoji = "N/A", "N/A", "❓"
-
-    market_trend = "⏸️"
-    avg_score = latest_df["Score"].mean() if not latest_df.empty else 0
-    if avg_score > 4: market_trend = "🚀"
-    elif avg_score < 2: market_trend = "📉"
-
-    st.markdown(f"### Fear & Greed: {fg_value} {fg_emoji} | Market Trend: {market_trend}")
-
-    # ==============================
-    # عرض الجدول باللون الأبيض
-    # ==============================
     st.dataframe(latest_df, use_container_width=True)
 else:
     st.warning("⚠️ البيانات غير كافية للـ AI")
