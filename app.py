@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX (Final Safe Version)")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (Final Styled Version)")
 
 MODEL_FILE = "model.pkl"
 
@@ -175,26 +175,6 @@ if len(df_ai) > 50:
         with open(MODEL_FILE,"wb") as f: pickle.dump(model,f)
 
 # ==============================
-# Coloring function
-# ==============================
-def color_cells(val, col):
-    try:
-        if col=="Vol x":
-            if val>1.5: return "background-color: green; color: white"
-            elif val>1: return "background-color: orange; color: black"
-            else: return "background-color: red; color: white"
-        elif col=="ATR":
-            if val>1: return "background-color: green; color: white"
-            elif val>0.5: return "background-color: orange; color: black"
-            else: return "background-color: red; color: white"
-        elif col=="OBV":
-            if val>0: return "background-color: green; color: white"
-            elif val==0: return "background-color: orange; color: black"
-            else: return "background-color: red; color: white"
-    except: return ""
-    return ""
-
-# ==============================
 # Build final table
 # ==============================
 rows = []
@@ -261,15 +241,11 @@ if "Chance %" in df.columns:
     df = df.sort_values("Chance %", ascending=False)
 
 # ==============================
-# Style
+# Styling columns separately
 # ==============================
-styled_df = df.style.apply(
-    lambda x: [
-        color_cells(x["Vol x"],"Vol x"),
-        color_cells(x["ATR"],"ATR"),
-        color_cells(x["OBV"],"OBV")
-    ],
-    axis=1
-)
+styled_df = df.style \
+    .applymap(lambda v: "background-color: green; color: white" if v>1.5 else ("background-color: orange; color: black" if v>1 else "background-color: red; color: white"), subset=["Vol x"]) \
+    .applymap(lambda v: "background-color: green; color: white" if v>1 else ("background-color: orange; color: black" if v>0.5 else "background-color: red; color: white"), subset=["ATR"]) \
+    .applymap(lambda v: "background-color: green; color: white" if v>0 else ("background-color: orange; color: black" if v==0 else "background-color: red; color: white"), subset=["OBV"])
 
-st.dataframe(styled_df,use_container_width=True)
+st.dataframe(styled_df, use_container_width=True)
