@@ -18453,5 +18453,9 @@
     {
         "coin": "USDON",
         "candles": []
+    },
+    {
+        "coin": "WLD",
+        "candles": []
     }
 ]
