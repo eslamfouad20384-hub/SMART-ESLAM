@@ -91,7 +91,13 @@ def calculate_bollinger(prices, period=20, mult=2):
 def calculate_atr(prices, high, low, period=14):
     df = pd.DataFrame({"close": prices, "high": high, "low": low})
     df['prev_close'] = df['close'].shift(1)
-    df['tr'] = df[['high','low','prev_close']].apply(lambda x: max(x['high']-x['low'], abs(x['high']-x['prev_close']), abs(x['low']-x['prev_close'])), axis=1)
+    df['tr'] = df[['high','low','prev_close']].apply(
+        lambda x: max(
+            x['high']-x['low'],
+            abs(x['high']-x['prev_close']),
+            abs(x['low']-x['prev_close'])
+        ), axis=1
+    )
     atr = df['tr'].rolling(period).mean()
     return atr.iloc[-1] if not atr.empty else 0
 
@@ -160,8 +166,8 @@ def run_collector():
                 d = fetch_data(c["id"])
                 prices = [p[1] for p in d.get("prices",[])]
                 vols = [v[1] for v in d.get("total_volumes",[])]
-                highs = [p[1]*1.01 for p in d.get("prices",[])]  # تقريبي للـ High
-                lows = [p[1]*0.99 for p in d.get("prices",[])]    # تقريبي للـ Low
+                highs = [p[1]*1.01 for p in d.get("prices",[])]
+                lows = [p[1]*0.99 for p in d.get("prices",[])]
 
                 candles = []
                 for i in range(len(prices)):
@@ -212,13 +218,15 @@ rows = []
 # ==============================
 for coin_data in data:
     candles = coin_data.get("candles", [])
-    if len(candles) < 5:  # أقل من 5 شموع مش كفاية لحساب مؤشرات
+    if len(candles) < 5:
         continue
 
     prices = np.array([c["price"] for c in candles])
     vols = np.array([c["volume"] for c in candles])
-    highs = np.array([c["high"] for c in candles])
-    lows = np.array([c["low"] for c in candles])
+
+    # ✅ التعديل هنا
+    highs = np.array([c.get("high", c["price"]*1.01) for c in candles])
+    lows = np.array([c.get("low", c["price"]*0.99) for c in candles])
 
     for i in range(1, len(prices)-1):
         rsi = calculate_rsi(prices[max(0,i-15):i])
@@ -283,14 +291,16 @@ if len(df_ai) > 50:
 
         prices = np.array([c["price"] for c in candles])
         vols = np.array([c["volume"] for c in candles])
-        highs = np.array([c["high"] for c in candles])
-        lows = np.array([c["low"] for c in candles])
+
+        # ✅ التعديل هنا كمان
+        highs = np.array([c.get("high", c["price"]*1.01) for c in candles])
+        lows = np.array([c.get("low", c["price"]*0.99) for c in candles])
 
         rsi = calculate_rsi(prices[-15:])
         drop = ((prices[-1] - prices.max()) / prices.max()) * 100
-        avg_vol = vols[-10:].mean() if len(vols) >= 10 else vols.mean()
+        avg_vol = vols[-10:].mean() if len(vols)>=10 else vols.mean()
         volx = vols[-1] / avg_vol if avg_vol>0 else 1
-        change = ((prices[-1] - prices[-3]) / prices[-3]) * 100 if len(prices) >= 3 else 0
+        change = ((prices[-1] - prices[-3]) / prices[-3]) * 100 if len(prices)>=3 else 0
         macd_line, signal_line = calculate_macd(prices[-26:]) if len(prices)>=26 else (0,0)
         upper_bb, lower_bb = calculate_bollinger(prices[-20:]) if len(prices)>=20 else (0,0)
         sma_short = pd.Series(prices[-10:]).mean()
@@ -309,7 +319,6 @@ if len(df_ai) > 50:
         if atr > 0.5: score +=1
         if obv > 0: score +=1
 
-        # Data Status
         if len(candles) >= 30:
             data_status = "🟢 Good"
         elif len(candles) >= 20:
@@ -317,7 +326,6 @@ if len(df_ai) > 50:
         else:
             data_status = "🔴 Low"
 
-        # Signal
         if score >= 8:
             signal = "🔥 Strong Buy"
         elif score >= 5:
