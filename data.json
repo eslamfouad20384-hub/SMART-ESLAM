@@ -18305,5 +18305,17 @@
     {
         "coin": "FET",
         "candles": []
+    },
+    {
+        "coin": "DOT",
+        "candles": []
+    },
+    {
+        "coin": "ONT",
+        "candles": []
+    },
+    {
+        "coin": "RLUSD",
+        "candles": []
     }
 ]
