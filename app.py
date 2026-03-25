@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX (Final Colored & Signals)")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (Final Safe Version)")
 
 MODEL_FILE = "model.pkl"
 
@@ -77,6 +77,8 @@ def obv(prices, vol):
     return o
 
 def support_resistance(prices):
+    if len(prices) < 1:
+        return 0, 0
     return np.min(prices[-20:]), np.max(prices[-20:])
 
 def volume_x(vol):
@@ -199,7 +201,7 @@ rows = []
 
 for d in data:
     c = d.get("candles", [])
-    if len(c)<2: continue
+    if len(c)<1: continue
 
     prices = np.array([x["price"] for x in c])
     vol = np.array([x["volume"] for x in c])
@@ -251,8 +253,16 @@ for d in data:
     })
 
 df = pd.DataFrame(rows)
-df = df.sort_values("Chance %", ascending=False)
 
+# ==============================
+# Safe sort
+# ==============================
+if "Chance %" in df.columns:
+    df = df.sort_values("Chance %", ascending=False)
+
+# ==============================
+# Style
+# ==============================
 styled_df = df.style.apply(
     lambda x: [
         color_cells(x["Vol x"],"Vol x"),
