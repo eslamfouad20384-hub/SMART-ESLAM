@@ -94,16 +94,13 @@ def run_collector():
     st.info("⏳ تحديث CoinGecko...")
     coins = get_coins()
     data = load_github_data()
-
     for i in range(0, len(coins), 10):
         batch = coins[i:i+10]
-
         def work(c):
             try:
                 symbol = c["symbol"].upper()
                 if not should_update(data, symbol):
                     return None
-
                 d = fetch_data(c["id"])
                 prices = [p[1] for p in d.get("prices",[])]
                 vols = [v[1] for v in d.get("total_volumes",[])]
@@ -118,52 +115,52 @@ def run_collector():
                 return symbol
             except:
                 return None
-
         with ThreadPoolExecutor(max_workers=5) as ex:
             ex.map(work, batch)
-
         time.sleep(2)
-
     st.success("✅ CoinGecko تم التحديث بدون حظر")
 
 # ==============================
-# Binance Top 50 + Blacklist
+# مصدر مجاني جديد: Coinpaprika Top 50 + Blacklist
 # ==============================
-BINANCE_BLACKLIST = ["USDT", "USDC", "USD1", "BNB", "SOLANA", "BTC", "ETH", "XRP"]
+BLACKLIST = ["USDT", "USDC", "USD1", "BNB", "SOLANA", "BTC", "ETH", "XRP"]
 
-def get_binance_coins():
-    url = "https://api.binance.com/api/v3/ticker/24hr"
+def get_coinpaprika_coins():
+    url = "https://api.coinpaprika.com/v1/tickers"
     data = requests.get(url).json()
     coins = []
     for c in data:
-        if c["symbol"].endswith("USDT") and c["symbol"] not in BINANCE_BLACKLIST:
-            coins.append(c["symbol"])
+        symbol = c["symbol"].upper()
+        if symbol not in BLACKLIST:
+            coins.append(symbol)
         if len(coins) >= 50:
             break
     return coins
 
-def fetch_binance_data(symbol):
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": "1h", "limit": 100}
-    data = requests.get(url, params=params).json()
-    candles = []
-    for d in data:
-        candles.append({
-            "timestamp": int(d[0]),
-            "price": float(d[4]),
-            "volume": float(d[5])
-        })
-    return candles
+def fetch_coinpaprika_data(symbol):
+    url = f"https://api.coinpaprika.com/v1/tickers/{symbol.lower()}/historical?start=2023-01-01&interval=1h"
+    try:
+        data = requests.get(url).json()
+        candles = []
+        for d in data:
+            candles.append({
+                "timestamp": int(time.time()*1000),  # مؤقت
+                "price": float(d.get("price", 0)),
+                "volume": float(d.get("volume", 0))
+            })
+        return candles
+    except:
+        return []
 
-def run_binance_collector():
-    st.info("⏳ تحديث Binance Top 50 مع استثناءات...")
+def run_coinpaprika_collector():
+    st.info("⏳ تحديث Coinpaprika Top 50 مع استثناءات...")
     data = load_github_data()
-    coins = get_binance_coins()
+    coins = get_coinpaprika_coins()
     for symbol in coins:
         try:
             if not should_update(data, symbol):
                 continue
-            candles = fetch_binance_data(symbol)
+            candles = fetch_coinpaprika_data(symbol)
             found = False
             for row in data:
                 if row["coin"] == symbol:
@@ -175,18 +172,20 @@ def run_binance_collector():
         except Exception as e:
             print(e)
     save_github_data(data)
-    st.success("✅ Binance Top 50 تم التحديث مع استثناءات")
+    st.success("✅ Coinpaprika Top 50 تم التحديث مع استثناءات")
 
 # ==============================
 # أزرار التحديث
 # ==============================
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("🔄 تحديث CoinGecko"):
         run_collector()
 with col2:
-    if st.button("🔥 تحديث Binance (Top 50)"):
-        run_binance_collector()
+    if st.button("🔥 تحديث Coinpaprika Top 50"):
+        run_coinpaprika_collector()
+with col3:
+    st.markdown("✅ Blacklist: " + ", ".join(BLACKLIST))
 
 # ==============================
 # AI + Analysis + Signal/Data
@@ -276,4 +275,17 @@ if len(df_ai) > 20:
         fg_value, fg_status, fg_emoji = "N/A", "N/A", "❓"
 
     market_trend = "⏸️"
-    avg_score = latest_df["Score"].mean()
+    avg_score = latest_df["Score"].mean() if not latest_df.empty else 0
+    if avg_score > 4: market_trend = "🚀"
+    elif avg_score < 2: market_trend = "📉"
+
+    st.markdown(f"### Fear & Greed: {fg_value} {fg_emoji} | Market Trend: {market_trend}")
+
+    # ==============================
+    # Dark Mode للجدول
+    # ==============================
+    st.dataframe(latest_df.style.set_properties(
+        **{'background-color': '#111', 'color': 'white'}
+    ), use_container_width=True)
+else:
+    st.warning("⚠️ البيانات غير كافية للـ AI")
