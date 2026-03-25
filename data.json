@@ -22014,5 +22014,9 @@
     {
         "coin": "PENGU",
         "candles": []
+    },
+    {
+        "coin": "MON",
+        "candles": []
     }
 ]
