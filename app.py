@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX (Final Stable AI)")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (Final Colored & Signals)")
 
 MODEL_FILE = "model.pkl"
 
@@ -38,11 +38,10 @@ def save_data(data):
         repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
 
 # ==============================
-# Indicators (SAFE)
+# Indicators
 # ==============================
 def rsi(prices):
-    if len(prices) < 2:
-        return 50
+    if len(prices) < 2: return 50
     delta = np.diff(prices)
     gain = np.maximum(delta, 0)
     loss = np.abs(np.minimum(delta, 0))
@@ -50,16 +49,14 @@ def rsi(prices):
     return 100 - (100 / (1 + rs))
 
 def macd(prices):
-    if len(prices) < 5:
-        return 0, 0
+    if len(prices) < 5: return 0, 0
     s = pd.Series(prices)
     m = s.ewm(span=12).mean() - s.ewm(span=26).mean()
     sig = m.ewm(span=9).mean()
     return m.iloc[-1], sig.iloc[-1]
 
 def atr(prices, high, low):
-    if len(prices) < 2:
-        return 0
+    if len(prices) < 2: return 0
     df = pd.DataFrame({"c": prices, "h": high, "l": low})
     df["pc"] = df["c"].shift(1)
     df["tr"] = df.apply(lambda x: max(
@@ -70,8 +67,7 @@ def atr(prices, high, low):
     return df["tr"].mean()
 
 def obv(prices, vol):
-    if len(prices) < 2:
-        return 0
+    if len(prices) < 2: return 0
     o = 0
     for i in range(1, len(prices)):
         if prices[i] > prices[i-1]:
@@ -79,6 +75,14 @@ def obv(prices, vol):
         elif prices[i] < prices[i-1]:
             o -= vol[i]
     return o
+
+def support_resistance(prices):
+    return np.min(prices[-20:]), np.max(prices[-20:])
+
+def volume_x(vol):
+    if len(vol) < 5: return 1
+    avg = np.mean(vol[-5:])
+    return vol[-1] / avg if avg > 0 else 1
 
 # ==============================
 # Update Data
@@ -106,8 +110,8 @@ def update():
             for i in range(len(prices)):
                 candles.append({
                     "price": prices[i],
-                    "high": prices[i] * 1.01,
-                    "low": prices[i] * 0.99,
+                    "high": prices[i]*1.01,
+                    "low": prices[i]*0.99,
                     "volume": vols[i] if i < len(vols) else 0
                 })
 
@@ -133,57 +137,69 @@ data = load_data()
 # ==============================
 # Build AI Dataset
 # ==============================
-rows = []
+rows_ai = []
 
 for d in data:
     c = d.get("candles", [])
-    if len(c) < 10:
-        continue
+    if len(c) < 10: continue
 
     prices = np.array([x["price"] for x in c])
     vol = np.array([x["volume"] for x in c])
     high = np.array([x.get("high", x["price"]*1.01) for x in c])
     low = np.array([x.get("low", x["price"]*0.99) for x in c])
 
-    for i in range(5, len(prices) - 2):
+    for i in range(5, len(prices)-2):
         r = rsi(prices[:i])
         m, s = macd(prices[:i])
         a = atr(prices[:i], high[:i], low[:i])
         o = obv(prices[:i], vol[:i])
-
         target = 1 if prices[i+2] > prices[i] else 0
+        rows_ai.append([r, m-s, a, o, target])
 
-        rows.append([r, m - s, a, o, target])
-
-df_ai = pd.DataFrame(rows, columns=["rsi", "macd", "atr", "obv", "target"])
+df_ai = pd.DataFrame(rows_ai, columns=["rsi","macd","atr","obv","target"])
 
 # ==============================
 # Train or Load Model
 # ==============================
 model = None
-
 if len(df_ai) > 50:
-    X = df_ai[["rsi", "macd", "atr", "obv"]]
+    X = df_ai[["rsi","macd","atr","obv"]]
     y = df_ai["target"]
-
     if os.path.exists(MODEL_FILE):
-        with open(MODEL_FILE, "rb") as f:
-            model = pickle.load(f)
+        with open(MODEL_FILE,"rb") as f: model = pickle.load(f)
     else:
         model = RandomForestClassifier(n_estimators=150)
-        model.fit(X, y)
-        with open(MODEL_FILE, "wb") as f:
-            pickle.dump(model, f)
+        model.fit(X,y)
+        with open(MODEL_FILE,"wb") as f: pickle.dump(model,f)
 
 # ==============================
-# Final Table
+# Coloring function
+# ==============================
+def color_cells(val, col):
+    try:
+        if col=="Vol x":
+            if val>1.5: return "background-color: green; color: white"
+            elif val>1: return "background-color: orange; color: black"
+            else: return "background-color: red; color: white"
+        elif col=="ATR":
+            if val>1: return "background-color: green; color: white"
+            elif val>0.5: return "background-color: orange; color: black"
+            else: return "background-color: red; color: white"
+        elif col=="OBV":
+            if val>0: return "background-color: green; color: white"
+            elif val==0: return "background-color: orange; color: black"
+            else: return "background-color: red; color: white"
+    except: return ""
+    return ""
+
+# ==============================
+# Build final table
 # ==============================
 rows = []
 
 for d in data:
     c = d.get("candles", [])
-    if len(c) < 2:
-        continue
+    if len(c)<2: continue
 
     prices = np.array([x["price"] for x in c])
     vol = np.array([x["volume"] for x in c])
@@ -194,36 +210,56 @@ for d in data:
     m, s = macd(prices)
     a = atr(prices, high, low)
     o = obv(prices, vol)
+    volx = volume_x(vol)
+    sup,res = support_resistance(prices)
 
     score = 0
-    if r < 35: score += 2
-    if m > s: score += 2
-    if a > 0.5: score += 1
-    if o > 0: score += 1
+    if r<35: score+=2
+    if m>s: score+=2
+    if a>0.5: score+=1
+    if o>0: score+=1
+    if volx>1.5: score+=2
 
     chance = 0
-    if model and len(c) >= 10:
-        chance = model.predict_proba([[r, m - s, a, o]])[0][1] * 100
+    if model and len(c)>=10:
+        chance = model.predict_proba([[r,m-s,a,o]])[0][1]*100
 
-    if len(c) >= 30:
-        status = "🟢 Good"
-    elif len(c) >= 20:
-        status = "🟡 Moderate"
-    else:
-        status = "🔴 Low"
+    # Signal
+    if score>=6: signal="🔥 Strong Buy"
+    elif score>=4: signal="🚀 Buy"
+    elif score>=2: signal="🟠 Hold"
+    else: signal="❌ No Trade"
+
+    # Data status
+    if len(c)>=30: status="🟢 Good"
+    elif len(c)>=20: status="🟡 Moderate"
+    else: status="🔴 Low"
 
     rows.append({
         "Coin": d["coin"],
-        "Price": round(prices[-1], 2),
-        "RSI": round(r, 2),
-        "ATR": round(a, 2),
-        "OBV": round(o, 2),
+        "Price": round(prices[-1],2),
+        "RSI": round(r,2),
+        "Vol x": round(volx,2),
+        "ATR": round(a,2),
+        "OBV": round(o,2),
+        "Support": round(sup,2),
+        "Resistance": round(res,2),
         "Score": score,
-        "Chance %": round(chance, 2),
+        "Chance %": round(chance,2),
+        "Signal": signal,
         "Data": status
     })
 
 df = pd.DataFrame(rows)
 df = df.sort_values("Chance %", ascending=False)
 
-st.dataframe(df, use_container_width=True)
+styled_df = df.style.apply(
+    lambda x: [
+        color_cells(x["Vol x"],"Vol x"),
+        color_cells(x["ATR"],"ATR"),
+        color_cells(x["OBV"],"OBV")
+    ],
+    axis=1
+)
+
+st.dataframe(styled_df,use_container_width=True)
