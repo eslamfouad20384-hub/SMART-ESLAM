@@ -127,12 +127,19 @@ BLACKLIST = ["USDT", "USDC", "USD1", "BNB", "SOLANA", "BTC", "ETH", "XRP"]
 
 def get_coinpaprika_coins():
     url = "https://api.coinpaprika.com/v1/tickers"
-    data = requests.get(url).json()
+    try:
+        data = requests.get(url).json()
+    except:
+        return []
     coins = []
     for c in data:
-        symbol = c["symbol"].upper()
-        if symbol not in BLACKLIST:
-            coins.append(symbol)
+        symbol = c.get("symbol")
+        if not symbol:
+            continue
+        symbol = symbol.upper()
+        if symbol in BLACKLIST:
+            continue
+        coins.append(symbol)
         if len(coins) >= 50:
             break
     return coins
@@ -144,7 +151,7 @@ def fetch_coinpaprika_data(symbol):
         candles = []
         for d in data:
             candles.append({
-                "timestamp": int(time.time()*1000),  # مؤقت
+                "timestamp": int(time.time()*1000),
                 "price": float(d.get("price", 0)),
                 "volume": float(d.get("volume", 0))
             })
@@ -282,10 +289,8 @@ if len(df_ai) > 20:
     st.markdown(f"### Fear & Greed: {fg_value} {fg_emoji} | Market Trend: {market_trend}")
 
     # ==============================
-    # Dark Mode للجدول
+    # عرض الجدول باللون الأبيض
     # ==============================
-    st.dataframe(latest_df.style.set_properties(
-        **{'background-color': '#111', 'color': 'white'}
-    ), use_container_width=True)
+    st.dataframe(latest_df, use_container_width=True)
 else:
     st.warning("⚠️ البيانات غير كافية للـ AI")
