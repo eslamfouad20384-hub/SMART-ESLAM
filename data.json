@@ -20253,5 +20253,13 @@
     {
         "coin": "KAT",
         "candles": []
+    },
+    {
+        "coin": "C",
+        "candles": []
+    },
+    {
+        "coin": "PENGU",
+        "candles": []
     }
 ]
