@@ -18297,5 +18297,13 @@
     {
         "coin": "SAHARA",
         "candles": []
+    },
+    {
+        "coin": "QUQ",
+        "candles": []
+    },
+    {
+        "coin": "FET",
+        "candles": []
     }
 ]
