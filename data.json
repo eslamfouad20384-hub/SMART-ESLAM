@@ -18449,5 +18449,9 @@
     {
         "coin": "FIL",
         "candles": []
+    },
+    {
+        "coin": "USDON",
+        "candles": []
     }
 ]
