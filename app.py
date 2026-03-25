@@ -176,3 +176,178 @@ def run_collector():
                 for row in data:
                     if row["coin"] == symbol:
                         row["candles"] = candles
+                        updated = True
+                        return
+
+                data.append({"coin":symbol,"candles":candles})
+                updated = True
+
+            except Exception as e:
+                print(e)
+
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            ex.map(work, batch)
+
+        time.sleep(2)
+
+    if updated:
+        save_github_data(data)
+
+    st.success("✅ تم التحديث")
+
+# ==============================
+# زر التحديث
+# ==============================
+if st.button("🔄 تحديث"):
+    run_collector()
+
+# ==============================
+# Load data
+# ==============================
+data = load_github_data()
+rows = []
+
+# ==============================
+# Prepare AI dataset
+# ==============================
+for coin_data in data:
+    candles = coin_data.get("candles", [])
+    if len(candles) < 5:  # أقل من 5 شموع مش كفاية لحساب مؤشرات
+        continue
+
+    prices = np.array([c["price"] for c in candles])
+    vols = np.array([c["volume"] for c in candles])
+    highs = np.array([c["high"] for c in candles])
+    lows = np.array([c["low"] for c in candles])
+
+    for i in range(1, len(prices)-1):
+        rsi = calculate_rsi(prices[max(0,i-15):i])
+        drop = ((prices[i] - prices[:i].max()) / prices[:i].max()) * 100 if i>0 else 0
+        avg_vol = vols[max(0,i-10):i].mean()
+        volx = vols[i] / avg_vol if avg_vol>0 else 1
+        change = ((prices[i] - prices[i-3]) / prices[i-3]) * 100 if i>=3 else 0
+        macd_line, signal_line = calculate_macd(prices[max(0,i-26):i]) if i>=1 else (0,0)
+        upper_bb, lower_bb = calculate_bollinger(prices[max(0,i-20):i]) if i>=1 else (0,0)
+        sma_short = pd.Series(prices[max(0,i-10):i]).mean()
+        sma_long = pd.Series(prices[max(0,i-30):i]).mean() if i>=30 else sma_short
+        atr = calculate_atr(prices[:i+1], highs[:i+1], lows[:i+1])
+        obv = calculate_obv(prices[:i+1], vols[:i+1])
+
+        score = 0
+        if rsi < 35: score += 3
+        if drop < -20: score += 3
+        if volx > 1.5: score += 2
+        if change > 0: score += 2
+        if macd_line > signal_line: score +=1
+        if prices[i] < lower_bb: score +=1
+        if atr > 0.5: score +=1
+        if obv > 0: score +=1
+
+        target = 1 if i+3 < len(prices) and prices[i+3] > prices[i] else 0
+
+        rows.append({
+            "rsi": rsi,
+            "drop": drop,
+            "volx": volx,
+            "change": change,
+            "macd_diff": macd_line - signal_line,
+            "bb_lower_diff": prices[i] - lower_bb,
+            "sma_short": sma_short,
+            "sma_long": sma_long,
+            "atr": atr,
+            "obv": obv,
+            "score": score,
+            "target": target
+        })
+
+df_ai = pd.DataFrame(rows)
+
+# ==============================
+# Train AI
+# ==============================
+if len(df_ai) > 50:
+    X = df_ai[["rsi","drop","volx","change","macd_diff","bb_lower_diff","sma_short","sma_long","score","atr","obv"]]
+    y = df_ai["target"]
+
+    model = RandomForestClassifier(n_estimators=200)
+    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
+    model.fit(X_train,y_train)
+
+    latest_rows = []
+
+    for coin_data in data:
+        coin = coin_data["coin"]
+        candles = coin_data.get("candles", [])
+        if len(candles) < 5:
+            continue
+
+        prices = np.array([c["price"] for c in candles])
+        vols = np.array([c["volume"] for c in candles])
+        highs = np.array([c["high"] for c in candles])
+        lows = np.array([c["low"] for c in candles])
+
+        rsi = calculate_rsi(prices[-15:])
+        drop = ((prices[-1] - prices.max()) / prices.max()) * 100
+        avg_vol = vols[-10:].mean() if len(vols) >= 10 else vols.mean()
+        volx = vols[-1] / avg_vol if avg_vol>0 else 1
+        change = ((prices[-1] - prices[-3]) / prices[-3]) * 100 if len(prices) >= 3 else 0
+        macd_line, signal_line = calculate_macd(prices[-26:]) if len(prices)>=26 else (0,0)
+        upper_bb, lower_bb = calculate_bollinger(prices[-20:]) if len(prices)>=20 else (0,0)
+        sma_short = pd.Series(prices[-10:]).mean()
+        sma_long = pd.Series(prices[-30:]).mean() if len(prices)>=30 else sma_short
+        atr = calculate_atr(prices, highs, lows)
+        obv = calculate_obv(prices, vols)
+        support, resistance = get_support_resistance(prices)
+
+        score = 0
+        if rsi < 35: score += 3
+        if drop < -20: score += 3
+        if volx > 1.5: score += 2
+        if change > 0: score += 2
+        if macd_line > signal_line: score +=1
+        if prices[-1] < lower_bb: score +=1
+        if atr > 0.5: score +=1
+        if obv > 0: score +=1
+
+        # Data Status
+        if len(candles) >= 30:
+            data_status = "🟢 Good"
+        elif len(candles) >= 20:
+            data_status = "🟡 Moderate"
+        else:
+            data_status = "🔴 Low"
+
+        # Signal
+        if score >= 8:
+            signal = "🔥 Strong Buy"
+        elif score >= 5:
+            signal = "🚀 Buy"
+        elif score >= 3:
+            signal = "🟠 Hold"
+        else:
+            signal = "❌ No Trade"
+
+        chance = model.predict_proba([[rsi,drop,volx,change,macd_line-signal_line,prices[-1]-lower_bb,sma_short,sma_long,score,atr,obv]])[0][1]*100
+
+        latest_rows.append({
+            "Coin": coin,
+            "Price (USD)": round(prices[-1],2),
+            "Drop %": round(drop,2),
+            "RSI": round(rsi,2),
+            "Volume x": round(volx,2),
+            "ATR": round(atr,2),
+            "OBV": round(obv,2),
+            "Support": round(support,2),
+            "Resistance": round(resistance,2),
+            "Score /10": score,
+            "Chance %": round(chance,2),
+            "🚨 Signal": signal,
+            "📊 Data": data_status
+        })
+
+    df = pd.DataFrame(latest_rows)
+    df = df.sort_values("Chance %", ascending=False)
+    st.dataframe(df, use_container_width=True)
+
+else:
+    st.warning("⚠️ البيانات غير كافية للـ AI")
