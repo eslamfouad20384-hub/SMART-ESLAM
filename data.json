@@ -20055,5 +20055,9 @@
     {
         "coin": "VIRTUAL",
         "candles": []
+    },
+    {
+        "coin": "KITE",
+        "candles": []
     }
 ]
