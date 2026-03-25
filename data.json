@@ -18273,5 +18273,25 @@
     {
         "coin": "XRP",
         "candles": []
+    },
+    {
+        "coin": "USD1",
+        "candles": []
+    },
+    {
+        "coin": "NIGHT",
+        "candles": []
+    },
+    {
+        "coin": "XAUT",
+        "candles": []
+    },
+    {
+        "coin": "PAXG",
+        "candles": []
+    },
+    {
+        "coin": "BNB",
+        "candles": []
     }
 ]
