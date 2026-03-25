@@ -18345,5 +18345,17 @@
     {
         "coin": "ENA",
         "candles": []
+    },
+    {
+        "coin": "KITE",
+        "candles": []
+    },
+    {
+        "coin": "C",
+        "candles": []
+    },
+    {
+        "coin": "PENGU",
+        "candles": []
     }
 ]
