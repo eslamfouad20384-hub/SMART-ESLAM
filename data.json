@@ -18325,5 +18325,17 @@
     {
         "coin": "TRUMP",
         "candles": []
+    },
+    {
+        "coin": "USAD",
+        "candles": []
+    },
+    {
+        "coin": "APT",
+        "candles": []
+    },
+    {
+        "coin": "RENDER",
+        "candles": []
     }
 ]
