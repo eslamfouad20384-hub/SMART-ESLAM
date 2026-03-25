@@ -18337,5 +18337,13 @@
     {
         "coin": "RENDER",
         "candles": []
+    },
+    {
+        "coin": "KAT",
+        "candles": []
+    },
+    {
+        "coin": "ENA",
+        "candles": []
     }
 ]
