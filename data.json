@@ -18317,5 +18317,13 @@
     {
         "coin": "RLUSD",
         "candles": []
+    },
+    {
+        "coin": "ASTER",
+        "candles": []
+    },
+    {
+        "coin": "TRUMP",
+        "candles": []
     }
 ]
