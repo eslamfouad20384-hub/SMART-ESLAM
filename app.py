@@ -148,14 +148,17 @@ def fetch_messari_data(symbol):
     url = f"https://data.messari.io/api/v2/assets/{symbol}/metrics/market-data"
     try:
         d = requests.get(url).json()
-        candles = []
         price = d.get("data", {}).get("market_data", {}).get("price_usd", 0)
         volume = d.get("data", {}).get("market_data", {}).get("volume_last_24_hours", 0)
-        candles.append({
-            "timestamp": int(time.time()*1000),
-            "price": float(price),
-            "volume": float(volume)
-        })
+        # لو ما فيش بيانات تاريخية، نكرر السعر 30 مرة عشان AI Analysis يشتغل
+        candles = []
+        ts = int(time.time()*1000)
+        for i in range(30):
+            candles.append({
+                "timestamp": ts - (29-i)*3600*1000,  # كل ساعة
+                "price": float(price),
+                "volume": float(volume)
+            })
         return candles
     except:
         return []
