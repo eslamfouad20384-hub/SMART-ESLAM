@@ -3,17 +3,16 @@ import pandas as pd
 import numpy as np
 import requests
 import json
-import time
 from github import Github, Auth
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.layers import GRU, Dense, Dropout
 
 st.set_page_config(layout="wide")
-st.title("🚀 Crypto LSTM AI PRO MAX (TradingView Style)")
+st.title("🚀 Self-Learning Crypto GRU AI (Adaptive System)")
 
 # =========================
-# 🔥 GitHub Dataset
+# 🔥 GitHub Storage
 # =========================
 GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
 REPO_NAME = st.secrets["GITHUB"]["REPO"]
@@ -24,6 +23,9 @@ g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
 
+# =========================
+# 📥 Load Dataset
+# =========================
 def load_data():
     try:
         file = repo.get_contents(FILE_PATH, ref=BRANCH)
@@ -32,6 +34,9 @@ def load_data():
         return []
 
 
+# =========================
+# 📤 Save Dataset
+# =========================
 def save_data(data):
     content = json.dumps(data, indent=4)
     try:
@@ -42,7 +47,7 @@ def save_data(data):
 
 
 # =========================
-# 📡 CoinGecko API
+# 📡 Market Data
 # =========================
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -57,7 +62,7 @@ def get_history(coin_id):
 
 
 # =========================
-# 📊 Feature Builder
+# 📊 Feature Engineering
 # =========================
 def build_df(candles):
     df = pd.DataFrame(candles, columns=["price", "volume"])
@@ -71,16 +76,14 @@ def build_df(candles):
 
 
 # =========================
-# 💣 Whale Detection
+# 🐋 Whale Detection
 # =========================
 def detect_whale(df):
-    if df["volx"].iloc[-1] > 2:
-        return 1
-    return 0
+    return 1 if df["volx"].iloc[-1] > 2 else 0
 
 
 # =========================
-# 🧠 LSTM Dataset
+# 🧠 Sequences
 # =========================
 def create_sequences(data, seq_len=20):
     X, y = [], []
@@ -96,30 +99,51 @@ def create_sequences(data, seq_len=20):
 
 
 # =========================
-# 🧠 Build LSTM Model
+# 🧠 GRU Model
 # =========================
 def build_model(input_shape):
     model = Sequential()
-
-    model.add(LSTM(64, return_sequences=True, input_shape=input_shape))
+    model.add(GRU(64, return_sequences=True, input_shape=input_shape))
     model.add(Dropout(0.2))
-
-    model.add(LSTM(32))
+    model.add(GRU(32))
     model.add(Dropout(0.2))
-
     model.add(Dense(1, activation="sigmoid"))
-
     model.compile(loss="binary_crossentropy", optimizer="adam", metrics=["accuracy"])
-
     return model
 
 
 # =========================
-# 🚀 Main Run
+# 📊 Build Training Data from JSON
 # =========================
-if st.button("🚀 Run LSTM AI Scan"):
+def build_training_from_json(json_data):
+    df = pd.DataFrame(json_data)
 
-    data = load_data()
+    if len(df) < 10:
+        return None, None
+
+    # لازم يكون فيه نتائج سابقة
+    df = df.dropna()
+
+    features = df[["price", "volx", "Pump Probability"]].values
+
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(features)
+
+    X, y = [], []
+
+    for i in range(len(scaled) - 20):
+        X.append(scaled[i:i+20])
+        y.append(1 if df["profit"].iloc[i+20] > 0 else 0)
+
+    return np.array(X), np.array(y)
+
+
+# =========================
+# 🚀 MAIN SYSTEM
+# =========================
+if st.button("🚀 Run Self-Learning AI"):
+
+    json_data = load_data()
     coins = get_coins()
 
     results = []
@@ -128,11 +152,11 @@ if st.button("🚀 Run LSTM AI Scan"):
 
         try:
             hist = get_history(c["id"])
+
             prices = [p[1] for p in hist["prices"]]
             vols = [v[1] for v in hist["total_volumes"]]
 
             candles = list(zip(prices, vols))
-
             df = build_df(candles)
 
             if len(df) < 50:
@@ -147,8 +171,7 @@ if st.button("🚀 Run LSTM AI Scan"):
                 continue
 
             model = build_model((X.shape[1], X.shape[2]))
-
-            model.fit(X, y, epochs=3, batch_size=16, verbose=0)
+            model.fit(X, y, epochs=2, batch_size=16, verbose=0)
 
             last_seq = X[-1].reshape(1, X.shape[1], X.shape[2])
             pred = model.predict(last_seq, verbose=0)[0][0]
@@ -156,53 +179,54 @@ if st.button("🚀 Run LSTM AI Scan"):
             whale = detect_whale(df)
 
             # =========================
-            # 🎯 Signal Logic
+            # 🎯 SIGNAL
             # =========================
             if pred > 0.75:
                 signal = "🔥 STRONG BUY"
             elif pred > 0.55:
                 signal = "🚀 BUY"
-            elif whale == 1:
+            elif whale:
                 signal = "🐋 WHALE ALERT"
             else:
                 signal = "⚪ HOLD"
 
-            results.append({
-                "Coin": c["symbol"].upper(),
-                "Price": round(prices[-1], 4),
-                "Pump Probability": round(pred * 100, 2),
-                "Volume Spike": df["volx"].iloc[-1],
-                "Whale": whale,
-                "Signal": signal
-            })
+            profit = float(pred - 0.5) * 2  # simulation score
+
+            row = {
+                "coin": c["symbol"],
+                "price": prices[-1],
+                "volx": float(df["volx"].iloc[-1]),
+                "Pump Probability": float(pred),
+                "signal": signal,
+                "profit": profit
+            }
+
+            results.append(row)
 
         except:
             continue
 
+    # =========================
+    # 💾 SAVE LEARNING DATA
+    # =========================
+    json_data.extend(results)
+    save_data(json_data)
+
     df_out = pd.DataFrame(results)
 
-    # =========================
-    # 📊 Dashboard
-    # =========================
     if df_out.empty:
         st.warning("⚠️ مفيش بيانات كفاية")
     else:
         df_out = df_out.sort_values("Pump Probability", ascending=False)
-        st.subheader("📊 LSTM AI Dashboard")
+
+        st.subheader("📊 AI Live Dashboard")
         st.dataframe(df_out, use_container_width=True)
 
         # =========================
-        # 📈 Backtesting
+        # 📈 Self Learning Score
         # =========================
-        st.subheader("📈 Backtesting (Simple Simulation)")
+        avg_profit = df_out["Pump Probability"].mean()
 
-        profit = 0
-        trades = 0
-
-        for _, row in df_out.iterrows():
-            if "BUY" in row["Signal"]:
-                profit += row["Pump Probability"] * 0.01
-                trades += 1
-
-        st.write("Total Trades:", trades)
-        st.write("Estimated Profit %:", round(profit, 2))
+        st.subheader("🧠 AI Learning Status")
+        st.write("Dataset size:", len(json_data))
+        st.write("Avg confidence:", round(avg_profit * 100, 2), "%")
