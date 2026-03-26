@@ -2,253 +2,207 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import json
 import time
-from sklearn.ensemble import RandomForestClassifier
+from github import Github, Auth
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 
 st.set_page_config(layout="wide")
-st.title("🚀 Crypto AI Pump Predictor PRO (No Binance)")
+st.title("🚀 Crypto LSTM AI PRO MAX (TradingView Style)")
 
 # =========================
-# 🛡️ Safe API
+# 🔥 GitHub Dataset
 # =========================
-last_request_time = 0
-REQUEST_DELAY = 0.8
+GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
+REPO_NAME = st.secrets["GITHUB"]["REPO"]
+BRANCH = st.secrets["GITHUB"]["BRANCH"]
+FILE_PATH = "data.json"
 
-def safe_request(url):
-    global last_request_time
+g = Github(auth=Auth.Token(GITHUB_TOKEN))
+repo = g.get_repo(REPO_NAME)
+
+
+def load_data():
     try:
-        if time.time() - last_request_time < REQUEST_DELAY:
-            time.sleep(REQUEST_DELAY)
-
-        last_request_time = time.time()
-        r = requests.get(url, timeout=10)
-
-        if r.status_code != 200:
-            return None
-
-        return r.json()
+        file = repo.get_contents(FILE_PATH, ref=BRANCH)
+        return json.loads(file.decoded_content.decode())
     except:
-        return None
-
-
-# =========================
-# 📡 Sources (No Binance)
-# =========================
-def get_kucoin(symbol="BTC-USDT"):
-    url = f"https://api.kucoin.com/api/v1/market/candles?type=1min&symbol={symbol}"
-    data = safe_request(url)
-
-    if not data or "data" not in data:
         return []
 
-    out = []
+
+def save_data(data):
+    content = json.dumps(data, indent=4)
     try:
-        for c in data["data"]:
-            out.append([float(c[2]), float(c[5])])
+        file = repo.get_contents(FILE_PATH, ref=BRANCH)
+        repo.update_file(file.path, "update", content, file.sha, branch=BRANCH)
     except:
-        pass
-
-    return out
-
-
-def get_bybit(symbol="BTCUSDT"):
-    url = f"https://api.bybit.com/v5/market/kline?category=spot&symbol={symbol}&interval=1"
-    data = safe_request(url)
-
-    if not data or "result" not in data:
-        return []
-
-    out = []
-    try:
-        for c in data["result"]["list"]:
-            out.append([float(c[4]), float(c[5])])
-    except:
-        pass
-
-    return out
-
-
-def get_okx(symbol="BTC-USDT"):
-    url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}&bar=1m"
-    data = safe_request(url)
-
-    if not data or "data" not in data:
-        return []
-
-    out = []
-    try:
-        for c in data["data"]:
-            out.append([float(c[4]), float(c[5])])
-    except:
-        pass
-
-    return out
+        repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
 
 
 # =========================
-# 🔥 Merge Data
+# 📡 CoinGecko API
 # =========================
-def get_all_data(symbol):
-    data = []
+def get_coins():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {"vs_currency": "usd", "order": "volume_desc", "per_page": 30}
+    return requests.get(url, params=params).json()
 
-    for f in [get_kucoin, get_bybit, get_okx]:
-        try:
-            d = f(symbol)
-            if d:
-                data.extend(d)
-        except:
-            continue
 
-    if len(data) < 20:
-        return None
-
-    df = pd.DataFrame(data, columns=["price", "volume"])
-
-    return df
+def get_history(coin_id):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": 30}
+    return requests.get(url, params=params).json()
 
 
 # =========================
-# 🧠 Feature Engineering
+# 📊 Feature Builder
 # =========================
-def create_features(df):
-    df = df.copy()
+def build_df(candles):
+    df = pd.DataFrame(candles, columns=["price", "volume"])
 
     df["return"] = df["price"].pct_change()
-    df["ma5"] = df["price"].rolling(5).mean()
-    df["ma10"] = df["price"].rolling(10).mean()
-
-    df["trend"] = df["ma5"] - df["ma10"]
-    df["vol_ma"] = df["volume"].rolling(10).mean()
-    df["volx"] = df["volume"] / df["vol_ma"]
+    df["volx"] = df["volume"] / df["volume"].rolling(10).mean()
+    df["trend"] = df["price"].rolling(5).mean() - df["price"].rolling(20).mean()
 
     df = df.dropna()
-
     return df
 
 
 # =========================
-# 💣 Labeling (Pump / No Pump)
+# 💣 Whale Detection
 # =========================
-def make_labels(df):
-    df = df.copy()
-
-    future_return = df["price"].shift(-5) / df["price"] - 1
-
-    df["label"] = (future_return > 0.003).astype(int)  # Pump threshold
-
-    df = df.dropna()
-
-    return df
+def detect_whale(df):
+    if df["volx"].iloc[-1] > 2:
+        return 1
+    return 0
 
 
 # =========================
-# 🧠 AI Model
+# 🧠 LSTM Dataset
 # =========================
-def train_model(df):
-    features = ["return", "trend", "volx"]
+def create_sequences(data, seq_len=20):
+    X, y = [], []
 
-    X = df[features]
-    y = df["label"]
+    for i in range(len(data) - seq_len - 5):
+        seq = data[i:i+seq_len]
+        target = 1 if data[i+seq_len+5][0] > data[i+seq_len][0] else 0
 
-    model = RandomForestClassifier(
-        n_estimators=120,
-        max_depth=6,
-        random_state=42
-    )
+        X.append(seq)
+        y.append(target)
 
-    model.fit(X, y)
+    return np.array(X), np.array(y)
+
+
+# =========================
+# 🧠 Build LSTM Model
+# =========================
+def build_model(input_shape):
+    model = Sequential()
+
+    model.add(LSTM(64, return_sequences=True, input_shape=input_shape))
+    model.add(Dropout(0.2))
+
+    model.add(LSTM(32))
+    model.add(Dropout(0.2))
+
+    model.add(Dense(1, activation="sigmoid"))
+
+    model.compile(loss="binary_crossentropy", optimizer="adam", metrics=["accuracy"])
 
     return model
 
 
 # =========================
-# 📊 Signal Engine
+# 🚀 Main Run
 # =========================
-def get_signal(pred_prob):
-    if pred_prob > 0.75:
-        return "🟢 BUY STRONG"
-    elif pred_prob > 0.55:
-        return "🟢 BUY"
-    elif pred_prob < 0.35:
-        return "🔴 EXIT"
-    else:
-        return "⚪ HOLD"
+if st.button("🚀 Run LSTM AI Scan"):
 
-
-# =========================
-# 🟢 Data Status
-# =========================
-def status(n):
-    if n > 60:
-        return "🟢 GOOD"
-    elif n > 30:
-        return "🟡 MEDIUM"
-    return "🔴 LOW"
-
-
-# =========================
-# 🚀 UI
-# =========================
-symbols = st.text_input("Enter symbols", "BTCUSDT,ETHUSDT")
-
-if st.button("Run AI Scan"):
+    data = load_data()
+    coins = get_coins()
 
     results = []
 
-    for sym in symbols.split(","):
+    for c in coins:
 
-        df = get_all_data(sym.strip())
+        try:
+            hist = get_history(c["id"])
+            prices = [p[1] for p in hist["prices"]]
+            vols = [v[1] for v in hist["total_volumes"]]
 
-        if df is None or len(df) < 50:
+            candles = list(zip(prices, vols))
+
+            df = build_df(candles)
+
+            if len(df) < 50:
+                continue
+
+            scaler = MinMaxScaler()
+            scaled = scaler.fit_transform(df[["price", "volume", "return", "volx", "trend"]])
+
+            X, y = create_sequences(scaled)
+
+            if len(X) < 20:
+                continue
+
+            model = build_model((X.shape[1], X.shape[2]))
+
+            model.fit(X, y, epochs=3, batch_size=16, verbose=0)
+
+            last_seq = X[-1].reshape(1, X.shape[1], X.shape[2])
+            pred = model.predict(last_seq, verbose=0)[0][0]
+
+            whale = detect_whale(df)
+
+            # =========================
+            # 🎯 Signal Logic
+            # =========================
+            if pred > 0.75:
+                signal = "🔥 STRONG BUY"
+            elif pred > 0.55:
+                signal = "🚀 BUY"
+            elif whale == 1:
+                signal = "🐋 WHALE ALERT"
+            else:
+                signal = "⚪ HOLD"
+
+            results.append({
+                "Coin": c["symbol"].upper(),
+                "Price": round(prices[-1], 4),
+                "Pump Probability": round(pred * 100, 2),
+                "Volume Spike": df["volx"].iloc[-1],
+                "Whale": whale,
+                "Signal": signal
+            })
+
+        except:
             continue
 
-        df = create_features(df)
-        df = make_labels(df)
-
-        if len(df) < 30:
-            continue
-
-        model = train_model(df)
-
-        last = df.iloc[-1]
-
-        X_live = np.array([[last["return"], last["trend"], last["volx"]]])
-
-        prob = model.predict_proba(X_live)[0][1]
-
-        results.append({
-            "Coin": sym.strip(),
-            "Price": round(last["price"], 5),
-            "Volx": round(last["volx"], 2),
-            "Trend": round(last["trend"], 6),
-            "Pump Probability": round(prob * 100, 2),
-            "Data Status": status(len(df)),
-            "Signal": get_signal(prob)
-        })
-
-    result_df = pd.DataFrame(results)
+    df_out = pd.DataFrame(results)
 
     # =========================
-    # 🎨 UI SAFE TABLE
+    # 📊 Dashboard
     # =========================
-    if result_df.empty:
+    if df_out.empty:
         st.warning("⚠️ مفيش بيانات كفاية")
     else:
+        df_out = df_out.sort_values("Pump Probability", ascending=False)
+        st.subheader("📊 LSTM AI Dashboard")
+        st.dataframe(df_out, use_container_width=True)
 
-        def color(val):
-            val = str(val)
-            if "GOOD" in val:
-                return "background-color:#2ecc71;color:black"
-            if "MEDIUM" in val:
-                return "background-color:#f1c40f;color:black"
-            if "LOW" in val:
-                return "background-color:#e74c3c;color:white"
-            return ""
+        # =========================
+        # 📈 Backtesting
+        # =========================
+        st.subheader("📈 Backtesting (Simple Simulation)")
 
-        if "Data Status" not in result_df.columns:
-            result_df["Data Status"] = "LOW"
+        profit = 0
+        trades = 0
 
-        styled = result_df.style.applymap(color, subset=["Data Status"])
+        for _, row in df_out.iterrows():
+            if "BUY" in row["Signal"]:
+                profit += row["Pump Probability"] * 0.01
+                trades += 1
 
-        st.subheader("📊 AI Pump Prediction Dashboard")
-        st.dataframe(styled, use_container_width=True)
+        st.write("Total Trades:", trades)
+        st.write("Estimated Profit %:", round(profit, 2))
