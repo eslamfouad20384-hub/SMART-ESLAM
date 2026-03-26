@@ -5,14 +5,13 @@ import requests
 import json
 from github import Github, Auth
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import GRU, Dense, Dropout
+from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
-st.title("🚀 Self-Learning Crypto GRU AI (Adaptive System)")
+st.title("🚀 Crypto AI PRO MAX (No Deep Learning Edition)")
 
 # =========================
-# 🔥 GitHub Storage
+# 🔥 GitHub JSON Storage
 # =========================
 GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
 REPO_NAME = st.secrets["GITHUB"]["REPO"]
@@ -23,9 +22,6 @@ g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
 
-# =========================
-# 📥 Load Dataset
-# =========================
 def load_data():
     try:
         file = repo.get_contents(FILE_PATH, ref=BRANCH)
@@ -34,13 +30,10 @@ def load_data():
         return []
 
 
-# =========================
-# 📤 Save Dataset
-# =========================
 def save_data(data):
     content = json.dumps(data, indent=4)
     try:
-        file = repo.get_contents(FILE_PATH, ref=BRANCH)
+        file = repo.get_contents(FILE_PATH)
         repo.update_file(file.path, "update", content, file.sha, branch=BRANCH)
     except:
         repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
@@ -69,7 +62,12 @@ def build_df(candles):
 
     df["return"] = df["price"].pct_change()
     df["volx"] = df["volume"] / df["volume"].rolling(10).mean()
-    df["trend"] = df["price"].rolling(5).mean() - df["price"].rolling(20).mean()
+
+    df["ma_fast"] = df["price"].rolling(5).mean()
+    df["ma_slow"] = df["price"].rolling(20).mean()
+    df["trend"] = df["ma_fast"] - df["ma_slow"]
+
+    df["momentum"] = df["price"] - df["price"].shift(3)
 
     df = df.dropna()
     return df
@@ -79,72 +77,42 @@ def build_df(candles):
 # 🐋 Whale Detection
 # =========================
 def detect_whale(df):
-    return 1 if df["volx"].iloc[-1] > 2 else 0
+    return 1 if df["volx"].iloc[-1] > 2.2 else 0
 
 
 # =========================
-# 🧠 Sequences
+# 🧠 Feature Matrix
 # =========================
-def create_sequences(data, seq_len=20):
+def create_dataset(df):
+    features = df[["price", "volx", "trend", "momentum", "return"]].values
+
     X, y = [], []
 
-    for i in range(len(data) - seq_len - 5):
-        seq = data[i:i+seq_len]
-        target = 1 if data[i+seq_len+5][0] > data[i+seq_len][0] else 0
-
-        X.append(seq)
-        y.append(target)
+    for i in range(len(features) - 5):
+        X.append(features[i])
+        y.append(1 if df["price"].iloc[i+5] > df["price"].iloc[i] else 0)
 
     return np.array(X), np.array(y)
 
 
 # =========================
-# 🧠 GRU Model
+# 🧠 Model
 # =========================
-def build_model(input_shape):
-    model = Sequential()
-    model.add(GRU(64, return_sequences=True, input_shape=input_shape))
-    model.add(Dropout(0.2))
-    model.add(GRU(32))
-    model.add(Dropout(0.2))
-    model.add(Dense(1, activation="sigmoid"))
-    model.compile(loss="binary_crossentropy", optimizer="adam", metrics=["accuracy"])
-    return model
+def build_model():
+    return RandomForestClassifier(
+        n_estimators=200,
+        max_depth=10,
+        random_state=42
+    )
 
 
 # =========================
-# 📊 Build Training Data from JSON
+# 🚀 MAIN
 # =========================
-def build_training_from_json(json_data):
-    df = pd.DataFrame(json_data)
+if st.button("🚀 Run AI Scan"):
 
-    if len(df) < 10:
-        return None, None
-
-    # لازم يكون فيه نتائج سابقة
-    df = df.dropna()
-
-    features = df[["price", "volx", "Pump Probability"]].values
-
-    scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(features)
-
-    X, y = [], []
-
-    for i in range(len(scaled) - 20):
-        X.append(scaled[i:i+20])
-        y.append(1 if df["profit"].iloc[i+20] > 0 else 0)
-
-    return np.array(X), np.array(y)
-
-
-# =========================
-# 🚀 MAIN SYSTEM
-# =========================
-if st.button("🚀 Run Self-Learning AI"):
-
-    json_data = load_data()
     coins = get_coins()
+    json_data = load_data()
 
     results = []
 
@@ -162,24 +130,24 @@ if st.button("🚀 Run Self-Learning AI"):
             if len(df) < 50:
                 continue
 
-            scaler = MinMaxScaler()
-            scaled = scaler.fit_transform(df[["price", "volume", "return", "volx", "trend"]])
-
-            X, y = create_sequences(scaled)
+            X, y = create_dataset(df)
 
             if len(X) < 20:
                 continue
 
-            model = build_model((X.shape[1], X.shape[2]))
-            model.fit(X, y, epochs=2, batch_size=16, verbose=0)
+            scaler = MinMaxScaler()
+            X_scaled = scaler.fit_transform(X)
 
-            last_seq = X[-1].reshape(1, X.shape[1], X.shape[2])
-            pred = model.predict(last_seq, verbose=0)[0][0]
+            model = build_model()
+            model.fit(X_scaled, y)
+
+            last = X_scaled[-1].reshape(1, -1)
+            pred = model.predict_proba(last)[0][1]
 
             whale = detect_whale(df)
 
             # =========================
-            # 🎯 SIGNAL
+            # 🎯 SIGNALS
             # =========================
             if pred > 0.75:
                 signal = "🔥 STRONG BUY"
@@ -190,15 +158,14 @@ if st.button("🚀 Run Self-Learning AI"):
             else:
                 signal = "⚪ HOLD"
 
-            profit = float(pred - 0.5) * 2  # simulation score
-
             row = {
-                "coin": c["symbol"],
+                "coin": c["symbol"].upper(),
                 "price": prices[-1],
                 "volx": float(df["volx"].iloc[-1]),
-                "Pump Probability": float(pred),
-                "signal": signal,
-                "profit": profit
+                "trend": float(df["trend"].iloc[-1]),
+                "momentum": float(df["momentum"].iloc[-1]),
+                "prob": float(pred),
+                "signal": signal
             }
 
             results.append(row)
@@ -207,7 +174,7 @@ if st.button("🚀 Run Self-Learning AI"):
             continue
 
     # =========================
-    # 💾 SAVE LEARNING DATA
+    # 💾 SELF LEARNING STORAGE
     # =========================
     json_data.extend(results)
     save_data(json_data)
@@ -217,16 +184,18 @@ if st.button("🚀 Run Self-Learning AI"):
     if df_out.empty:
         st.warning("⚠️ مفيش بيانات كفاية")
     else:
-        df_out = df_out.sort_values("Pump Probability", ascending=False)
+        df_out = df_out.sort_values("prob", ascending=False)
 
-        st.subheader("📊 AI Live Dashboard")
+        st.subheader("📊 AI Dashboard")
         st.dataframe(df_out, use_container_width=True)
 
         # =========================
-        # 📈 Self Learning Score
+        # 🧠 AI STATS
         # =========================
-        avg_profit = df_out["Pump Probability"].mean()
-
         st.subheader("🧠 AI Learning Status")
+
         st.write("Dataset size:", len(json_data))
-        st.write("Avg confidence:", round(avg_profit * 100, 2), "%")
+        st.write("Avg confidence:", round(df_out["prob"].mean() * 100, 2), "%")
+
+        buy_signals = len(df_out[df_out["signal"].str.contains("BUY")])
+        st.write("Active BUY signals:", buy_signals)
