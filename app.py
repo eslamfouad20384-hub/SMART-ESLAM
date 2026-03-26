@@ -2,18 +2,39 @@ import streamlit as st
 import pandas as pd
 import requests
 import numpy as np
+import json
+import os
+import joblib
+import datetime
 from concurrent.futures import ThreadPoolExecutor
+from sklearn.ensemble import RandomForestClassifier
+from github import Github
 
+# ==============================
+# SETUP
+# ==============================
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Reversal Scanner PRO AI")
+st.title("🚀 Smart Crypto AI PRO FULL SYSTEM")
+
+DATA_FILE = "data.json"
+MODEL_DIR = "models"
+os.makedirs(MODEL_DIR, exist_ok=True)
 
 # ==============================
-# إعدادات
+# DATA HANDLING
 # ==============================
-MIN_VOLUME = 10_000_000
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
 # ==============================
-# جلب العملات
+# COINS API
 # ==============================
 @st.cache_data(ttl=300)
 def get_coins():
@@ -21,7 +42,7 @@ def get_coins():
     params = {
         "vs_currency": "usd",
         "order": "volume_desc",
-        "per_page": 100,
+        "per_page": 50,
         "page": 1
     }
     return requests.get(url, params=params).json()
@@ -30,9 +51,6 @@ def get_coins():
 # INDICATORS
 # ==============================
 def rsi(prices, period=14):
-    if len(prices) < period + 1:
-        return 50
-
     delta = np.diff(prices)
     gain = np.maximum(delta, 0)
     loss = -np.minimum(delta, 0)
@@ -43,22 +61,67 @@ def rsi(prices, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-def ema(prices, span=20):
+def ema(prices, span):
     return pd.Series(prices).ewm(span=span).mean().values[-1]
 
-def bollinger(prices, window=20):
-    sma = np.mean(prices[-window:])
-    std = np.std(prices[-window:])
-    upper = sma + 2 * std
-    lower = sma - 2 * std
-    return upper, lower
-
-def atr(prices):
-    diffs = np.abs(np.diff(prices))
-    return np.mean(diffs[-14:]) if len(diffs) >= 14 else np.mean(diffs)
+# ==============================
+# STRATEGY ENGINE
+# ==============================
+def choose_strategy(rsi_val, drop):
+    if rsi_val < 30 and drop < -20:
+        return "AGGRESSIVE"
+    elif rsi_val < 40:
+        return "SAFE"
+    else:
+        return "TREND"
 
 # ==============================
-# تحليل العملة
+# MODEL PER COIN
+# ==============================
+def model_path(symbol):
+    return f"{MODEL_DIR}/{symbol}.pkl"
+
+def train_model(symbol, df):
+    if len(df) < 20:
+        return
+
+    X = df[["rsi", "drop", "ema_trend"]]
+    y = df["result"]
+
+    model = RandomForestClassifier(n_estimators=100)
+    model.fit(X, y)
+
+    joblib.dump(model, model_path(symbol))
+
+def predict(symbol, rsi_val, drop, ema_trend):
+    path = model_path(symbol)
+
+    if not os.path.exists(path):
+        return "NO_MODEL"
+
+    model = joblib.load(path)
+    return model.predict([[rsi_val, drop, ema_trend]])[0]
+
+# ==============================
+# LOGGING
+# ==============================
+def log_trade(symbol, rsi_val, drop, ema_trend, signal, result):
+    data = load_data()
+
+    data.append({
+        "time": str(datetime.datetime.now()),
+        "coin": symbol,
+        "rsi": rsi_val,
+        "drop": drop,
+        "ema_trend": ema_trend,
+        "signal": signal,
+        "result": result
+    })
+
+    save_data(data)
+
+# ==============================
+# ANALYZE COIN
 # ==============================
 def analyze_coin(coin):
     try:
@@ -68,7 +131,6 @@ def analyze_coin(coin):
         params = {"vs_currency": "usd", "days": 30}
 
         data = requests.get(url, params=params).json()
-
         prices = np.array([p[1] for p in data["prices"]])
 
         if len(prices) < 30:
@@ -77,80 +139,69 @@ def analyze_coin(coin):
         price = prices[-1]
         max_price = prices.max()
 
-        # ==============================
-        # Drop %
-        # ==============================
         drop = ((price - max_price) / max_price) * 100
 
-        # ==============================
-        # Indicators
-        # ==============================
         rsi_val = rsi(prices[-20:])
         ema20 = ema(prices, 20)
         ema50 = ema(prices, 50)
-        upper, lower = bollinger(prices)
-        atr_val = atr(prices)
 
-        # ==============================
-        # Conditions
-        # ==============================
-        near_support = price <= lower
-        trend_up = ema20 > ema50
-        volatility_ok = atr_val > np.mean(prices) * 0.001
+        ema_trend = 1 if ema20 > ema50 else 0
 
-        # ==============================
-        # Score Engine
-        # ==============================
-        score = 0
+        strategy = choose_strategy(rsi_val, drop)
 
-        if drop < -25:
-            score += 2
+        signal = predict(coin["symbol"], rsi_val, drop, ema_trend)
 
-        if rsi_val < 35:
-            score += 2
+        if signal == "NO_MODEL":
+            signal = "WAIT"
 
-        if near_support:
-            score += 2
-
-        if trend_up:
-            score += 2
-
-        if volatility_ok:
-            score += 1
-
-        # ==============================
-        # Signal
-        # ==============================
-        if score >= 8:
-            signal = "🚀 STRONG REVERSAL BUY"
-        elif score >= 6:
-            signal = "🔥 BUY"
-        elif score >= 4:
-            signal = "⏳ WAIT"
-        else:
-            signal = "❌ NO TRADE"
+        # log fake result placeholder (later for learning)
+        log_trade(coin["symbol"], rsi_val, drop, ema_trend, signal, "PENDING")
 
         return {
             "Coin": coin["symbol"].upper(),
             "Price": round(price, 6),
             "Drop %": round(drop, 2),
             "RSI": round(rsi_val, 2),
-            "EMA20": round(ema20, 6),
-            "EMA50": round(ema50, 6),
-            "Support": round(lower, 6),
-            "Resistance": round(upper, 6),
-            "ATR": round(atr_val, 6),
-            "Score": score,
-            "Signal": signal
+            "EMA Trend": ema_trend,
+            "Strategy": strategy,
+            "AI Signal": signal
         }
 
     except:
         return None
 
 # ==============================
-# RUN SCANNER
+# DAILY TRAINING
 # ==============================
-if st.button("🔍 Scan السوق بالكامل"):
+def auto_train():
+    data = load_data()
+    df = pd.DataFrame(data)
+
+    if len(df) > 50:
+        for coin in df["coin"].unique():
+            coin_df = df[df["coin"] == coin]
+            train_model(coin, coin_df)
+
+# ==============================
+# GITHUB UPLOAD (OPTIONAL)
+# ==============================
+def upload_to_github(token, repo_name):
+    g = Github(token)
+    repo = g.get_user().get_repo(repo_name)
+
+    with open(DATA_FILE, "r") as f:
+        content = f.read()
+
+    try:
+        contents = repo.get_contents(DATA_FILE)
+        repo.update_file(DATA_FILE, "update data", content, contents.sha)
+    except:
+        repo.create_file(DATA_FILE, "init data", content)
+
+# ==============================
+# RUN
+# ==============================
+if st.button("🔍 Scan Market AI PRO"):
 
     coins = get_coins()
     results = []
@@ -164,14 +215,9 @@ if st.button("🔍 Scan السوق بالكامل"):
 
     df = pd.DataFrame(results)
 
-    if not df.empty:
-        df = df.sort_values(by="Score", ascending=False)
+    st.success(f"🔥 Found {len(df)} signals")
 
-        df = df[df["Score"] >= 5]
+    st.dataframe(df, use_container_width=True)
 
-        st.success(f"🔥 تم العثور على {len(df)} فرصة قوية")
-
-        st.dataframe(df, use_container_width=True)
-
-    else:
-        st.warning("❌ مفيش فرص حالياً")
+    # Auto training after scan
+    auto_train()
