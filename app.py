@@ -1,80 +1,146 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
 import requests
+import time
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-import joblib
 import os
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto AI Pump Predictor PRO")
+st.title("🚀 Crypto AI Signals PRO (No Binance)")
 
 # =========================
-# 🔥 حماية من الـ API Limit
+# 🛡️ Safe Request (Rate Limit Protection)
 # =========================
-REQUEST_DELAY = 0.8  # مهم جداً
 last_request_time = 0
+REQUEST_DELAY = 0.8
 
 def safe_request(url):
     global last_request_time
-    now = time.time()
-    if now - last_request_time < REQUEST_DELAY:
-        time.sleep(REQUEST_DELAY)
-
-    last_request_time = time.time()
     try:
+        now = time.time()
+        if now - last_request_time < REQUEST_DELAY:
+            time.sleep(REQUEST_DELAY)
+
+        last_request_time = time.time()
         r = requests.get(url, timeout=10)
+
+        if r.status_code != 200:
+            return None
+
         return r.json()
     except:
         return None
 
 
 # =========================
-# 📊 Normalize Data
+# 📡 KuCoin
 # =========================
-def normalize_candles(candles):
-    clean = []
-    for c in candles:
-        try:
-            clean.append({
-                "timestamp": c.get("timestamp") or c.get("t"),
-                "price": float(c.get("close") or c.get("c") or c.get("price") or c.get("last")),
-                "volume": float(c.get("volume") or c.get("v") or 0)
-            })
-        except:
-            continue
-
-    clean = sorted(clean, key=lambda x: x["timestamp"])
-    return clean
-
-
-# =========================
-# 📡 Example API (Binance fallback)
-# =========================
-def get_binance(symbol="BTCUSDT"):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50"
+def get_kucoin(symbol="BTC-USDT"):
+    url = f"https://api.kucoin.com/api/v1/market/candles?type=1min&symbol={symbol}"
     data = safe_request(url)
-    if not data:
+
+    if not data or "data" not in data:
         return []
 
     candles = []
-    for c in data:
-        candles.append({
-            "timestamp": c[0],
-            "close": c[4],
-            "volume": c[5]
-        })
+
+    try:
+        for c in data["data"]:
+            candles.append({
+                "timestamp": c[0],
+                "price": float(c[2]),
+                "volume": float(c[5]),
+                "source": "kucoin"
+            })
+    except:
+        pass
+
     return candles
+
+
+# =========================
+# 📡 Bybit
+# =========================
+def get_bybit(symbol="BTCUSDT"):
+    url = f"https://api.bybit.com/v5/market/kline?category=spot&symbol={symbol}&interval=1"
+    data = safe_request(url)
+
+    if not data or "result" not in data:
+        return []
+
+    candles = []
+
+    try:
+        for c in data["result"]["list"]:
+            candles.append({
+                "timestamp": c[0],
+                "price": float(c[4]),
+                "volume": float(c[5]),
+                "source": "bybit"
+            })
+    except:
+        pass
+
+    return candles
+
+
+# =========================
+# 📡 OKX
+# =========================
+def get_okx(symbol="BTC-USDT"):
+    url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}&bar=1m"
+    data = safe_request(url)
+
+    if not data or "data" not in data:
+        return []
+
+    candles = []
+
+    try:
+        for c in data["data"]:
+            candles.append({
+                "timestamp": c[0],
+                "price": float(c[4]),
+                "volume": float(c[5]),
+                "source": "okx"
+            })
+    except:
+        pass
+
+    return candles
+
+
+# =========================
+# 🔥 Merge All Data
+# =========================
+def get_all_data(symbol):
+    data = []
+
+    for func in [get_kucoin, get_bybit, get_okx]:
+        try:
+            d = func(symbol)
+            if d:
+                data.extend(d)
+        except:
+            continue
+
+    if not data:
+        return []
+
+    df = pd.DataFrame(data)
+
+    df = df.drop_duplicates(subset=["timestamp"])
+    df = df.sort_values("timestamp")
+
+    return df.to_dict("records")
 
 
 # =========================
 # 🧠 Feature Engineering
 # =========================
-def create_features(candles):
-    df = pd.DataFrame(candles)
+def create_features(df):
+    df = pd.DataFrame(df)
 
     df["return"] = df["price"].pct_change()
     df["vol_change"] = df["volume"].pct_change()
@@ -82,109 +148,107 @@ def create_features(candles):
     df["ma5"] = df["price"].rolling(5).mean()
     df["ma10"] = df["price"].rolling(10).mean()
 
-    df["vol_spike"] = df["volume"] / (df["volume"].rolling(10).mean())
+    df["trend"] = df["ma5"] - df["ma10"]
+    df["vol_spike"] = df["volume"] / df["volume"].rolling(10).mean()
 
     df = df.dropna()
     return df
 
 
 # =========================
-# 💣 Labeling (Training Data)
+# 🟢 Data Status
 # =========================
-def label_data(df):
-    df["future_return"] = df["price"].shift(-5) / df["price"] - 1
-
-    df["target"] = df["future_return"].apply(lambda x: 1 if x > 0.02 else 0)
-    df = df.dropna()
-
-    return df
-
-
-# =========================
-# 🤖 Train AI Model
-# =========================
-def train_model(df):
-    features = ["return", "vol_change", "ma5", "ma10", "vol_spike"]
-
-    X = df[features]
-    y = df["target"]
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_scaled, y, test_size=0.2, random_state=42
-    )
-
-    model = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=10,
-        random_state=42
-    )
-
-    model.fit(X_train, y_train)
-
-    joblib.dump(model, "model.pkl")
-    joblib.dump(scaler, "scaler.pkl")
-
-    return model, scaler
-
-
-# =========================
-# 🔮 Prediction
-# =========================
-def predict(df, model, scaler):
-    features = ["return", "vol_change", "ma5", "ma10", "vol_spike"]
-
-    X = scaler.transform(df[features].iloc[-1:].values)
-    prob = model.predict_proba(X)[0][1]
-
-    if prob > 0.75:
-        signal = "💣 STRONG PUMP (30-60 min)"
-    elif prob > 0.6:
-        signal = "🔥 Pump Possible"
+def get_data_status(df):
+    if len(df) >= 40:
+        return "🟢 GOOD"
+    elif len(df) >= 20:
+        return "🟡 MEDIUM"
     else:
-        signal = "❌ No Signal"
-
-    return prob, signal
+        return "🔴 LOW"
 
 
 # =========================
-# 📦 Load / Train Model
+# 📊 Signal Engine
 # =========================
-if os.path.exists("model.pkl"):
-    model = joblib.load("model.pkl")
-    scaler = joblib.load("scaler.pkl")
-else:
-    model = None
-    scaler = None
+def get_entry_exit_signal(df):
+    last = df.iloc[-1]
+
+    score = 0
+
+    if last["trend"] > 0:
+        score += 2
+
+    if last["vol_spike"] > 1.5:
+        score += 2
+
+    if last["return"] > 0:
+        score += 1
+
+    if score >= 5:
+        return "🟢 BUY STRONG"
+
+    if score >= 3:
+        return "🟢 BUY"
+
+    if last["trend"] < 0 and last["vol_spike"] > 1.5:
+        return "🔴 EXIT"
+
+    return "⚪ HOLD"
 
 
 # =========================
-# 🚀 MAIN LOOP
+# 🚀 UI INPUT
 # =========================
-symbol = st.text_input("Enter Symbol", "BTCUSDT")
+symbols = st.text_input("Enter symbols (comma separated)", "BTCUSDT,ETHUSDT,DOTUSDT")
 
 if st.button("Run AI Scan"):
-    raw = get_binance(symbol)
 
-    if len(raw) < 20:
-        st.error("❌ Not enough data")
-        st.stop()
+    coins = symbols.split(",")
 
-    candles = normalize_candles(raw)
+    rows = []
 
-    df = create_features(candles)
-    df = label_data(df)
+    for symbol in coins:
 
-    if model is None:
-        st.info("🧠 Training AI Model...")
-        model, scaler = train_model(df)
-    else:
-        st.info("🧠 Using existing model")
+        raw = get_all_data(symbol.strip())
 
-    prob, signal = predict(df, model, scaler)
+        if len(raw) < 10:
+            continue
 
-    st.subheader("📊 Result")
-    st.write("Pump Probability:", round(prob * 100, 2), "%")
-    st.success(signal)
+        df = create_features(raw)
+
+        if len(df) == 0:
+            continue
+
+        signal = get_entry_exit_signal(df)
+        last = df.iloc[-1]
+
+        rows.append({
+            "Coin": symbol.strip(),
+            "Price": round(last["price"], 4),
+            "Trend": round(last["trend"], 4),
+            "Volx": round(last["vol_spike"], 2),
+            "Return %": round(last["return"] * 100, 2),
+            "Data Status": get_data_status(df),
+            "Signal": signal
+        })
+
+    result_df = pd.DataFrame(rows)
+
+    # =========================
+    # 🎨 Color Styling
+    # =========================
+    def color_status(val):
+        if "GOOD" in val:
+            return "background-color: #2ecc71; color: black;"
+        elif "MEDIUM" in val:
+            return "background-color: #f1c40f; color: black;"
+        else:
+            return "background-color: #e74c3c; color: white;"
+
+    styled_df = result_df.style.applymap(
+        color_status,
+        subset=["Data Status"]
+    )
+
+    st.subheader("📊 Trading Signals Dashboard")
+    st.dataframe(styled_df, use_container_width=True)
