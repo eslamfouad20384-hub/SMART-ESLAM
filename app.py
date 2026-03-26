@@ -12,7 +12,7 @@ st.title("🚀 Smart Crypto Scanner AI PRO MAX")
 JSON_FILE = "data.json"
 
 # =========================
-# LOAD / SAVE DATA
+# LOAD / SAVE
 # =========================
 def load_data():
     if os.path.exists(JSON_FILE):
@@ -25,41 +25,49 @@ def save_data(data):
         json.dump(data, f, indent=4)
 
 # =========================
-# TOP COINS
+# TOP COINS (SAFE)
 # =========================
 def get_top_coins(limit=20):
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {
-        "vs_currency": "usd",
-        "order": "volume_desc",
-        "per_page": limit,
-        "page": 1
-    }
+    try:
+        url = "https://api.coingecko.com/api/v3/coins/markets"
+        params = {
+            "vs_currency": "usd",
+            "order": "volume_desc",
+            "per_page": limit,
+            "page": 1
+        }
 
-    data = requests.get(url, params=params).json()
+        r = requests.get(url, params=params, timeout=5)
 
-    coins = []
-    for c in data:
-        symbol = c.get("symbol")
-        if symbol:
-            coins.append(symbol.upper() + "USDT")
+        if r.status_code != 200:
+            return ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
-    return coins
+        data = r.json()
+
+        coins = []
+        for c in data:
+            if isinstance(c, dict) and c.get("symbol"):
+                coins.append(c["symbol"].upper() + "USDT")
+
+        return coins
+
+    except:
+        return ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
 # =========================
-# PRICE (KuCoin)
+# PRICE
 # =========================
 def get_price(symbol):
     try:
         url = f"https://api.kucoin.com/api/v1/market/orderbook/level1"
         params = {"symbol": symbol.replace("USDT", "-USDT")}
-        r = requests.get(url, params=params).json()
+        r = requests.get(url, params=params, timeout=5).json()
         return float(r["data"]["price"])
     except:
         return None
 
 # =========================
-# OHLC HISTORY (REAL)
+# OHLC HISTORY
 # =========================
 def get_history(symbol):
     try:
@@ -69,10 +77,9 @@ def get_history(symbol):
             "symbol": symbol.replace("USDT", "-USDT")
         }
 
-        r = requests.get(url, params=params).json()
+        r = requests.get(url, params=params, timeout=5).json()
 
-        prices = [float(c[2]) for c in r["data"][:30]]  # close price
-        return prices
+        return [float(c[2]) for c in r["data"][:30]]
 
     except:
         return []
@@ -99,24 +106,48 @@ def momentum_icon(x):
         return "🟡 ●"
     elif x > -2:
         return "🔴 ↓"
-    else:
-        return "🔴 ↓↓"
+    return "🔴 ↓↓"
 
-def data_status(n):
-    if n > 25:
-        return "🟢 GOOD"
-    elif n > 15:
-        return "🟡 MEDIUM"
-    return "🔴 LOW"
+# =========================
+# MARKET STATE
+# =========================
+def market_state(prices):
+    if len(prices) < 20:
+        return "UNKNOWN", 0
+
+    returns = np.diff(prices) / prices[:-1]
+
+    vol = np.std(returns)
+    stress_score = vol * 100
+
+    if stress_score > 8:
+        return "CRITICAL", stress_score
+    elif stress_score > 4:
+        return "HIGH", stress_score
+    elif stress_score > 2:
+        return "NORMAL", stress_score
+    else:
+        return "CALM", stress_score
+
+def crash_detector(prices):
+    if len(prices) < 10:
+        return False
+
+    drop = (prices[-1] - prices[-5]) / prices[-5]
+
+    return drop < -0.03
+
+def auto_pause(state):
+    return state == "CRITICAL"
 
 # =========================
 # AI MODEL
 # =========================
-def train_model(dataset):
+def train_model(data):
     X, y = [], []
 
-    for d in dataset:
-        if "momentum" in d and "volx" in d and "price" in d:
+    for d in data:
+        if all(k in d for k in ["momentum", "volx", "price", "label"]):
             X.append([d["momentum"], d["volx"], d["price"]])
             y.append(d["label"])
 
@@ -127,18 +158,11 @@ def train_model(dataset):
     model.fit(X, y)
     return model
 
-# =========================
-# AI SCORE (VOLX INCLUDED)
-# =========================
 def ai_score(model, features):
     mom, vx, price = features
 
-    base = 0
+    base = mom * 2
 
-    # momentum effect
-    base += mom * 2
-
-    # volatility effect
     if vx > 0.06:
         base += 20
     elif vx < 0.01:
@@ -151,14 +175,14 @@ def ai_score(model, features):
 
     return max(0, min(100, prob + base))
 
-# =========================
-# SIGNALS
-# =========================
-def signal(score, vx):
+def signal(score, vx, state):
+    if state in ["CRITICAL", "HIGH"]:
+        if score > 85:
+            return "⚠️ SAFE BUY ONLY"
+        return "⛔ NO TRADE"
+
     if vx > 0.06:
-        if score > 70:
-            return "🔥 VOLATILE BUY"
-        return "⚠️ HIGH RISK"
+        return "🔥 VOLATILE BUY"
 
     if score > 80:
         return "🟢 STRONG BUY"
@@ -169,7 +193,7 @@ def signal(score, vx):
     return "🔴 SELL"
 
 # =========================
-# RUN SCANNER
+# RUN
 # =========================
 if st.button("🚀 Run AI Scan"):
 
@@ -192,8 +216,17 @@ if st.button("🚀 Run AI Scan"):
         mom = compute_momentum(history)
         vx = volx(history)
 
+        state, stress_score = market_state(history)
+
+        if auto_pause(state):
+            st.error("⛔ MARKET PAUSED (CRITICAL STRESS)")
+            break
+
+        if crash_detector(history):
+            st.warning(f"⚠️ CRASH WARNING: {sym}")
+
         score = ai_score(model, [mom, vx, price])
-        sig = signal(score, vx)
+        sig = signal(score, vx, state)
 
         rows.append({
             "Coin": sym,
@@ -202,7 +235,8 @@ if st.button("🚀 Run AI Scan"):
             "Momentum": momentum_icon(mom),
             "AI Score": round(score, 2),
             "VolX": vx,
-            "Data Status": data_status(len(history))
+            "Market State": state,
+            "Stress": round(stress_score, 2)
         })
 
         data.append({
@@ -216,11 +250,23 @@ if st.button("🚀 Run AI Scan"):
 
     df = pd.DataFrame(rows)
 
-    df = df.sort_values(by="AI Score", ascending=False)
-
-    st.subheader("📊 AI Trading Dashboard")
+    st.subheader("📊 AI Dashboard")
     st.dataframe(df, use_container_width=True)
 
-    st.subheader("🧠 AI Learning Status")
+    st.subheader("🌐 Market Stress Status")
+
+    if len(rows) > 0:
+        avg_state = rows[0]["Market State"]
+
+        if avg_state == "CRITICAL":
+            st.error("🔴 CRITICAL MARKET")
+        elif avg_state == "HIGH":
+            st.warning("🟠 HIGH VOLATILITY")
+        elif avg_state == "NORMAL":
+            st.info("🟡 NORMAL MARKET")
+        else:
+            st.success("🟢 CALM MARKET")
+
+    st.subheader("🧠 AI Stats")
     st.write("Dataset size:", len(data))
     st.write("Active BUY signals:", len(df[df["Signal"].str.contains("BUY")]))
