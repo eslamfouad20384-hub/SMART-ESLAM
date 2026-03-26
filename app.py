@@ -7,12 +7,12 @@ import os
 from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX")
 
 JSON_FILE = "data.json"
 
 # =========================
-# LOAD / SAVE JSON
+# LOAD / SAVE DATA
 # =========================
 def load_data():
     if os.path.exists(JSON_FILE):
@@ -25,7 +25,7 @@ def save_data(data):
         json.dump(data, f, indent=4)
 
 # =========================
-# COINGECKO TOP COINS
+# TOP COINS
 # =========================
 def get_top_coins(limit=20):
     url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -35,51 +35,60 @@ def get_top_coins(limit=20):
         "per_page": limit,
         "page": 1
     }
+
     data = requests.get(url, params=params).json()
+
     coins = []
     for c in data:
-        coins.append(c["symbol"].upper() + "USDT")
+        symbol = c.get("symbol")
+        if symbol:
+            coins.append(symbol.upper() + "USDT")
+
     return coins
 
 # =========================
-# APIs (NO BINANCE)
+# PRICE (KuCoin)
 # =========================
-def get_kucoin(symbol):
+def get_price(symbol):
     try:
-        url = f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={symbol.replace('USDT','-USDT')}"
-        r = requests.get(url).json()
+        url = f"https://api.kucoin.com/api/v1/market/orderbook/level1"
+        params = {"symbol": symbol.replace("USDT", "-USDT")}
+        r = requests.get(url, params=params).json()
         return float(r["data"]["price"])
     except:
         return None
 
-def get_bybit(symbol):
+# =========================
+# OHLC HISTORY (REAL)
+# =========================
+def get_history(symbol):
     try:
-        url = f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={symbol}"
-        r = requests.get(url).json()
-        return float(r["result"]["list"][0]["lastPrice"])
-    except:
-        return None
+        url = "https://api.kucoin.com/api/v1/market/candles"
+        params = {
+            "type": "1min",
+            "symbol": symbol.replace("USDT", "-USDT")
+        }
 
-def get_okx(symbol):
-    try:
-        url = f"https://www.okx.com/api/v5/market/ticker?instId={symbol.replace('USDT','-USDT')}"
-        r = requests.get(url).json()
-        return float(r["data"][0]["last"])
+        r = requests.get(url, params=params).json()
+
+        prices = [float(c[2]) for c in r["data"][:30]]  # close price
+        return prices
+
     except:
-        return None
+        return []
 
 # =========================
 # FEATURES
 # =========================
 def compute_momentum(prices):
-    if len(prices) < 4:
+    if len(prices) < 5:
         return 0
-    return prices[-1] - prices[-4]
+    return prices[-1] - prices[-5]
 
 def volx(prices):
     if len(prices) < 10:
-        return 1
-    return round(np.std(prices[-10:]) / np.mean(prices[-10:]), 2)
+        return 0
+    return round(np.std(prices) / np.mean(prices), 4)
 
 def momentum_icon(x):
     if x > 2:
@@ -94,7 +103,7 @@ def momentum_icon(x):
         return "🔴 ↓↓"
 
 def data_status(n):
-    if n > 30:
+    if n > 25:
         return "🟢 GOOD"
     elif n > 15:
         return "🟡 MEDIUM"
@@ -107,11 +116,9 @@ def train_model(dataset):
     X, y = [], []
 
     for d in dataset:
-        if not all(k in d for k in ["momentum", "volx", "price", "label"]):
-            continue
-
-        X.append([d["momentum"], d["volx"], d["price"]])
-        y.append(d["label"])
+        if "momentum" in d and "volx" in d and "price" in d:
+            X.append([d["momentum"], d["volx"], d["price"]])
+            y.append(d["label"])
 
     if len(X) < 20:
         return None
@@ -120,14 +127,39 @@ def train_model(dataset):
     model.fit(X, y)
     return model
 
+# =========================
+# AI SCORE (VOLX INCLUDED)
+# =========================
 def ai_score(model, features):
+    mom, vx, price = features
+
+    base = 0
+
+    # momentum effect
+    base += mom * 2
+
+    # volatility effect
+    if vx > 0.06:
+        base += 20
+    elif vx < 0.01:
+        base -= 10
+
     if model is None:
-        return round(np.random.uniform(40, 90), 1)
+        return max(0, min(100, 50 + base))
 
-    prob = model.predict_proba([features])[0][1]
-    return round(prob * 100, 1)
+    prob = model.predict_proba([features])[0][1] * 100
 
-def signal(score):
+    return max(0, min(100, prob + base))
+
+# =========================
+# SIGNALS
+# =========================
+def signal(score, vx):
+    if vx > 0.06:
+        if score > 70:
+            return "🔥 VOLATILE BUY"
+        return "⚠️ HIGH RISK"
+
     if score > 80:
         return "🟢 STRONG BUY"
     elif score > 60:
@@ -137,7 +169,7 @@ def signal(score):
     return "🔴 SELL"
 
 # =========================
-# RUN
+# RUN SCANNER
 # =========================
 if st.button("🚀 Run AI Scan"):
 
@@ -149,26 +181,26 @@ if st.button("🚀 Run AI Scan"):
 
     for sym in symbols:
 
-        price = get_kucoin(sym) or get_bybit(sym) or get_okx(sym)
+        price = get_price(sym)
         if not price:
             continue
 
-        # simulate history
-        history = [price * (1 + np.random.normal(0, 0.01)) for _ in range(20)]
-        history.append(price)
+        history = get_history(sym)
+        if len(history) < 10:
+            continue
 
         mom = compute_momentum(history)
         vx = volx(history)
 
         score = ai_score(model, [mom, vx, price])
-        sig = signal(score)
+        sig = signal(score, vx)
 
         rows.append({
             "Coin": sym,
-            "Price": price,
+            "Price": round(price, 4),
             "Signal": sig,
             "Momentum": momentum_icon(mom),
-            "AI Score": score,
+            "AI Score": round(score, 2),
             "VolX": vx,
             "Data Status": data_status(len(history))
         })
@@ -184,61 +216,11 @@ if st.button("🚀 Run AI Scan"):
 
     df = pd.DataFrame(rows)
 
-    # =========================
-    # TABLE FORMAT
-    # =========================
-    df = df[[
-        "Coin",
-        "Price",
-        "Signal",
-        "Momentum",
-        "AI Score",
-        "VolX",
-        "Data Status"
-    ]]
-
-    df["Price"] = df["Price"].apply(lambda x: f"{x:,.4f}")
-    df["AI Score"] = df["AI Score"].apply(lambda x: f"{x}%")
-    df["VolX"] = df["VolX"].apply(lambda x: f"{x}x")
-
     df = df.sort_values(by="AI Score", ascending=False)
 
-    # =========================
-    # COLORS
-    # =========================
-    def color_signal(val):
-        if "STRONG BUY" in val:
-            return "background-color: #006400; color: white"
-        elif "BUY" in val:
-            return "background-color: green; color: white"
-        elif "WAIT" in val:
-            return "background-color: orange; color: black"
-        elif "SELL" in val:
-            return "background-color: red; color: white"
-        return ""
+    st.subheader("📊 AI Trading Dashboard")
+    st.dataframe(df, use_container_width=True)
 
-    def color_status(val):
-        if "GOOD" in val:
-            return "background-color: green; color: white"
-        elif "MEDIUM" in val:
-            return "background-color: orange; color: black"
-        elif "LOW" in val:
-            return "background-color: red; color: white"
-        return ""
-
-    styled_df = df.style.applymap(color_signal, subset=["Signal"]) \
-                         .applymap(color_status, subset=["Data Status"])
-
-    st.subheader("📊 Trading Dashboard")
-    st.dataframe(styled_df, use_container_width=True)
-
-    # =========================
-    # STATS
-    # =========================
     st.subheader("🧠 AI Learning Status")
-
     st.write("Dataset size:", len(data))
-    st.write("Avg confidence:", round(df["AI Score"].str.replace("%","").astype(float).mean(), 2), "%")
-
-    buy = len(df[df["Signal"].str.contains("BUY")])
-    st.write("Active BUY signals:", buy)
+    st.write("Active BUY signals:", len(df[df["Signal"].str.contains("BUY")]))
