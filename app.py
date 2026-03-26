@@ -3,217 +3,199 @@ import pandas as pd
 import numpy as np
 import requests
 import json
-import os
-from datetime import datetime
+from github import Github, Auth
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.ensemble import RandomForestClassifier
 
-# =========================
-# CONFIG
-# =========================
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO")
-
-JSON_FILE = "data.json"
+st.title("🚀 Crypto AI PRO MAX (No Deep Learning Edition)")
 
 # =========================
-# LOAD / SAVE JSON
+# 🔥 GitHub JSON Storage
 # =========================
+GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
+REPO_NAME = st.secrets["GITHUB"]["REPO"]
+BRANCH = st.secrets["GITHUB"]["BRANCH"]
+FILE_PATH = "data.json"
+
+g = Github(auth=Auth.Token(GITHUB_TOKEN))
+repo = g.get_repo(REPO_NAME)
+
+
 def load_data():
-    if os.path.exists(JSON_FILE):
-        with open(JSON_FILE, "r") as f:
-            return json.load(f)
-    return []
+    try:
+        file = repo.get_contents(FILE_PATH, ref=BRANCH)
+        return json.loads(file.decoded_content.decode())
+    except:
+        return []
+
 
 def save_data(data):
-    with open(JSON_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-# =========================
-# EXCHANGE APIS (NO BINANCE)
-# =========================
-
-def get_kucoin(symbol="BTC-USDT"):
+    content = json.dumps(data, indent=4)
     try:
-        url = f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={symbol}"
-        r = requests.get(url, timeout=5).json()
-        return float(r["data"]["price"])
+        file = repo.get_contents(FILE_PATH)
+        repo.update_file(file.path, "update", content, file.sha, branch=BRANCH)
     except:
-        return None
+        repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
 
-
-def get_bybit(symbol="BTCUSDT"):
-    try:
-        url = f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={symbol}"
-        r = requests.get(url, timeout=5).json()
-        return float(r["result"]["list"][0]["lastPrice"])
-    except:
-        return None
-
-
-def get_okx(symbol="BTC-USDT"):
-    try:
-        url = f"https://www.okx.com/api/v5/market/ticker?instId={symbol}"
-        r = requests.get(url, timeout=5).json()
-        return float(r["data"][0]["last"])
-    except:
-        return None
 
 # =========================
-# FEATURE ENGINEERING
+# 📡 Market Data
 # =========================
-
-def compute_momentum(prices):
-    if len(prices) < 4:
-        return 0
-    return prices[-1] - prices[-4]
-
-
-def volx(prices):
-    if len(prices) < 5:
-        return 1
-    return round(np.std(prices[-10:]) / np.mean(prices[-10:]), 2)
+def get_coins():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {"vs_currency": "usd", "order": "volume_desc", "per_page": 30}
+    return requests.get(url, params=params).json()
 
 
-def momentum_icon(x):
-    if x > 2:
-        return "🟢 ↑↑"
-    elif x > 0:
-        return "🟢 ↑"
-    elif x == 0:
-        return "🟡 ●"
-    elif x > -2:
-        return "🔴 ↓"
-    else:
-        return "🔴 ↓↓"
+def get_history(coin_id):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": 30}
+    return requests.get(url, params=params).json()
+
 
 # =========================
-# DATA STATUS
+# 📊 Feature Engineering
 # =========================
+def build_df(candles):
+    df = pd.DataFrame(candles, columns=["price", "volume"])
 
-def data_status(n):
-    if n > 30:
-        return "🟢 GOOD"
-    elif n > 15:
-        return "🟡 MEDIUM"
-    return "🔴 LOW"
+    df["return"] = df["price"].pct_change()
+    df["volx"] = df["volume"] / df["volume"].rolling(10).mean()
 
-# =========================
-# SIMPLE AI MODEL
-# =========================
+    df["ma_fast"] = df["price"].rolling(5).mean()
+    df["ma_slow"] = df["price"].rolling(20).mean()
+    df["trend"] = df["ma_fast"] - df["ma_slow"]
 
-def train_model(dataset):
-    if len(dataset) < 20:
-        return None
+    df["momentum"] = df["price"] - df["price"].shift(3)
 
-    X = []
-    y = []
+    df = df.dropna()
+    return df
 
-    for d in dataset:
-        X.append([
-            d["momentum"],
-            d["volx"],
-            d["price"]
-        ])
-        y.append(d["label"])
-
-    model = RandomForestClassifier(n_estimators=100)
-    model.fit(X, y)
-    return model
-
-
-def ai_score(model, features):
-    if model is None:
-        return round(np.random.uniform(40, 90), 1)
-
-    prob = model.predict_proba([features])[0][1]
-    return round(prob * 100, 1)
 
 # =========================
-# SIGNAL LOGIC (SIMPLE)
+# 🐋 Whale Detection
 # =========================
+def detect_whale(df):
+    return 1 if df["volx"].iloc[-1] > 2.2 else 0
 
-def signal(score):
-    if score > 80:
-        return "🟢 STRONG BUY"
-    elif score > 60:
-        return "🟢 BUY"
-    elif score > 40:
-        return "🟡 WAIT"
-    return "🔴 SELL"
 
 # =========================
-# MAIN SCANNER
+# 🧠 Feature Matrix
 # =========================
+def create_dataset(df):
+    features = df[["price", "volx", "trend", "momentum", "return"]].values
 
-coins = {
-    "BTC-USDT": "BTCUSDT",
-    "ETH-USDT": "ETHUSDT",
-    "SOL-USDT": "SOLUSDT",
-    "XRP-USDT": "XRPUSDT"
-}
+    X, y = [], []
 
-data = load_data()
+    for i in range(len(features) - 5):
+        X.append(features[i])
+        y.append(1 if df["price"].iloc[i+5] > df["price"].iloc[i] else 0)
 
-model = train_model(data)
+    return np.array(X), np.array(y)
 
-rows = []
 
-for symbol, bybit_symbol in coins.items():
-
-    price = (
-        get_kucoin(symbol) or
-        get_bybit(bybit_symbol) or
-        get_okx(symbol)
+# =========================
+# 🧠 Model
+# =========================
+def build_model():
+    return RandomForestClassifier(
+        n_estimators=200,
+        max_depth=10,
+        random_state=42
     )
 
-    if not price:
-        continue
-
-    # simulate price history
-    history = [price * (1 + np.random.normal(0, 0.01)) for _ in range(20)]
-    history.append(price)
-
-    mom = compute_momentum(history)
-    vx = volx(history)
-
-    score = ai_score(model, [mom, vx, price])
-    sig = signal(score)
-
-    rows.append({
-        "Coin": symbol,
-        "Price": round(price, 4),
-        "Signal": sig,
-        "Momentum": momentum_icon(mom),
-        "AI Score": score,
-        "VolX": vx,
-        "Data Status": data_status(len(history))
-    })
-
-    # save for learning
-    data.append({
-        "momentum": mom,
-        "volx": vx,
-        "price": price,
-        "label": 1 if score > 70 else 0
-    })
-
-save_data(data)
 
 # =========================
-# DASHBOARD TABLE
+# 🚀 MAIN
 # =========================
+if st.button("🚀 Run AI Scan"):
 
-df = pd.DataFrame(rows)
+    coins = get_coins()
+    json_data = load_data()
 
-st.subheader("📊 Market Dashboard")
-st.dataframe(df, use_container_width=True)
+    results = []
 
-# =========================
-# SUMMARY
-# =========================
+    for c in coins:
 
-buy = len(df[df["Signal"].str.contains("BUY")])
-sell = len(df[df["Signal"].str.contains("SELL")])
+        try:
+            hist = get_history(c["id"])
 
-st.write("🟢 BUY Signals:", buy)
-st.write("🔴 SELL Signals:", sell)
+            prices = [p[1] for p in hist["prices"]]
+            vols = [v[1] for v in hist["total_volumes"]]
+
+            candles = list(zip(prices, vols))
+            df = build_df(candles)
+
+            if len(df) < 50:
+                continue
+
+            X, y = create_dataset(df)
+
+            if len(X) < 20:
+                continue
+
+            scaler = MinMaxScaler()
+            X_scaled = scaler.fit_transform(X)
+
+            model = build_model()
+            model.fit(X_scaled, y)
+
+            last = X_scaled[-1].reshape(1, -1)
+            pred = model.predict_proba(last)[0][1]
+
+            whale = detect_whale(df)
+
+            # =========================
+            # 🎯 SIGNALS
+            # =========================
+            if pred > 0.75:
+                signal = "🔥 STRONG BUY"
+            elif pred > 0.55:
+                signal = "🚀 BUY"
+            elif whale:
+                signal = "🐋 WHALE ALERT"
+            else:
+                signal = "⚪ HOLD"
+
+            row = {
+                "coin": c["symbol"].upper(),
+                "price": prices[-1],
+                "volx": float(df["volx"].iloc[-1]),
+                "trend": float(df["trend"].iloc[-1]),
+                "momentum": float(df["momentum"].iloc[-1]),
+                "prob": float(pred),
+                "signal": signal
+            }
+
+            results.append(row)
+
+        except:
+            continue
+
+    # =========================
+    # 💾 SELF LEARNING STORAGE
+    # =========================
+    json_data.extend(results)
+    save_data(json_data)
+
+    df_out = pd.DataFrame(results)
+
+    if df_out.empty:
+        st.warning("⚠️ مفيش بيانات كفاية")
+    else:
+        df_out = df_out.sort_values("prob", ascending=False)
+
+        st.subheader("📊 AI Dashboard")
+        st.dataframe(df_out, use_container_width=True)
+
+        # =========================
+        # 🧠 AI STATS
+        # =========================
+        st.subheader("🧠 AI Learning Status")
+
+        st.write("Dataset size:", len(json_data))
+        st.write("Avg confidence:", round(df_out["prob"].mean() * 100, 2), "%")
+
+        buy_signals = len(df_out[df_out["signal"].str.contains("BUY")])
+        st.write("Active BUY signals:", buy_signals)
