@@ -8,9 +8,15 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from github import Github, Auth
 import json
+from streamlit_autorefresh import st_autorefresh  # ✅ إضافة جديدة فقط
 
 st.set_page_config(layout="wide")
 st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Sweep + Data Status)")
+
+# ==============================
+# 🔄 Auto Refresh كل 3 دقايق
+# ==============================
+st_autorefresh(interval=180000, key="auto_refresh")
 
 # ==============================
 # GitHub setup
@@ -166,7 +172,7 @@ def run_collector():
     st.success("✅ Done")
 
 # ==============================
-# Button
+# Button (موجود بدون تغيير)
 # ==============================
 if st.button("🔄 Update"):
     run_collector()
