@@ -13,14 +13,11 @@ st.title("🚀 Smart Crypto Scanner PRO MAX")
 JSON_FILE = "signals.json"
 
 # ==============================
-# JSON FUNCTIONS
+# JSON
 # ==============================
 def load_json():
     if not os.path.exists(JSON_FILE):
-        with open(JSON_FILE, "w") as f:
-            json.dump([], f)
         return []
-
     with open(JSON_FILE, "r") as f:
         return json.load(f)
 
@@ -35,7 +32,6 @@ def save_signal(signal):
     data = load_json()
     now = datetime.now()
 
-    # منع التكرار
     for item in data:
         if item["Coin"] == signal["Coin"] and item["date"] == now.strftime("%Y-%m-%d"):
             return
@@ -53,7 +49,7 @@ def save_signal(signal):
     save_json(data)
 
 # ==============================
-# تحديث النتائج بعد 24 ساعة
+# تحديث الصفقات بعد 24 ساعة
 # ==============================
 def update_results():
     data = load_json()
@@ -63,12 +59,12 @@ def update_results():
         if item["status"] == "done":
             continue
 
+        signal_time = datetime.strptime(item["date"] + " " + item["time"], "%Y-%m-%d %H:%M")
+
+        if datetime.now() - signal_time < timedelta(hours=24):
+            continue
+
         try:
-            signal_time = datetime.strptime(item["date"] + " " + item["time"], "%Y-%m-%d %H:%M")
-
-            if datetime.now() - signal_time < timedelta(hours=24):
-                continue
-
             url = f"https://api.coingecko.com/api/v3/coins/{item['Coin'].lower()}/market_chart"
             params = {"vs_currency": "usd", "days": 1}
             res = requests.get(url, params=params).json()
@@ -77,6 +73,7 @@ def update_results():
 
             high = max(prices)
             low = min(prices)
+
             entry = item["Price"]
 
             item["high_after"] = round(high, 6)
@@ -84,9 +81,12 @@ def update_results():
 
             change = ((high - entry) / entry) * 100
 
-            item["result"] = "WIN" if change >= 5 else "LOSS"
-            item["status"] = "done"
+            if change >= 5:
+                item["result"] = "WIN"
+            else:
+                item["result"] = "LOSS"
 
+            item["status"] = "done"
             updated = True
 
         except:
@@ -94,6 +94,25 @@ def update_results():
 
     if updated:
         save_json(data)
+
+# ==============================
+# Ranking
+# ==============================
+def get_ranking():
+    data = load_json()
+    df = pd.DataFrame(data)
+
+    if df.empty or "result" not in df:
+        return pd.DataFrame()
+
+    df = df[df["status"] == "done"]
+
+    ranking = df.groupby("Coin")["result"].apply(
+        lambda x: (x == "WIN").sum() / len(x) * 100
+    ).reset_index()
+
+    ranking.columns = ["Coin", "Win Rate %"]
+    return ranking.sort_values(by="Win Rate %", ascending=False)
 
 # ==============================
 # RSI
@@ -134,7 +153,6 @@ def analyze_coin(coin):
 
         current_price = prices[-1]
         max_price = prices.max()
-
         drop_percent = ((current_price - max_price) / max_price) * 100
 
         rsi_now = calculate_rsi(prices[-15:])
@@ -154,6 +172,9 @@ def analyze_coin(coin):
         if volume_condition: score += 2
         if near_support: score += 2
 
+        if score >= 8:
+            st.toast(f"🔥 فرصة قوية: {coin['symbol'].upper()}")
+
         result = {
             "Coin": coin["symbol"].upper(),
             "Price": round(current_price, 6),
@@ -162,7 +183,6 @@ def analyze_coin(coin):
             "Score": score
         }
 
-        # 💾 التخزين من 8
         if score >= 8:
             save_signal(result)
 
@@ -172,13 +192,10 @@ def analyze_coin(coin):
         return None
 
 # ==============================
-# تحديث النتائج
+# تشغيل
 # ==============================
 update_results()
 
-# ==============================
-# تشغيل الاسكان
-# ==============================
 if st.button("🔍 Scan السوق بالكامل"):
 
     coins = requests.get(
@@ -197,40 +214,15 @@ if st.button("🔍 Scan السوق بالكامل"):
 
     df = pd.DataFrame(results)
 
-    # 📊 العرض من 6
     if not df.empty:
         df = df.sort_values(by="Score", ascending=False)
-
-        display_df = df[df["Score"] >= 6]
-
-        st.success(f"🔥 تم العثور على {len(display_df)} فرصة قوية")
-        st.dataframe(display_df, use_container_width=True)
-
-    else:
-        st.warning("❌ مفيش فرص حالياً")
+        st.dataframe(df)
 
 # ==============================
-# عرض الصفقات المحفوظة
+# عرض البيانات
 # ==============================
 if st.checkbox("📁 عرض الصفقات"):
     st.dataframe(pd.DataFrame(load_json()))
 
-# ==============================
-# Ranking
-# ==============================
 if st.checkbox("🏆 Ranking العملات"):
-    data = load_json()
-    df = pd.DataFrame(data)
-
-    if not df.empty and "result" in df.columns:
-        df = df[df["status"] == "done"]
-
-        ranking = df.groupby("Coin")["result"].apply(
-            lambda x: (x == "WIN").sum() / len(x) * 100
-        ).reset_index()
-
-        ranking.columns = ["Coin", "Win Rate %"]
-
-        st.dataframe(ranking.sort_values(by="Win Rate %", ascending=False))
-    else:
-        st.info("لسه مفيش بيانات كفاية")
+    st.dataframe(get_ranking())
