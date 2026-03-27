@@ -8,15 +8,31 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from github import Github, Auth
 import json
-from streamlit_autorefresh import st_autorefresh  # ✅ إضافة جديدة فقط
+from streamlit_autorefresh import st_autorefresh
+import base64
 
 st.set_page_config(layout="wide")
 st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Sweep + Data Status)")
 
-# ==============================
-# 🔄 Auto Refresh كل 3 دقايق
-# ==============================
+# 🔄 Auto Refresh
 st_autorefresh(interval=180000, key="auto_refresh")
+
+# ==============================
+# 🔊 Sound Alert Function
+# ==============================
+def play_sound():
+    try:
+        sound_file = open("alert.mp3", "rb")
+        sound_bytes = sound_file.read()
+        b64 = base64.b64encode(sound_bytes).decode()
+        md = f"""
+            <audio autoplay>
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+            </audio>
+        """
+        st.markdown(md, unsafe_allow_html=True)
+    except:
+        pass
 
 # ==============================
 # GitHub setup
@@ -76,17 +92,12 @@ def calculate_bollinger(prices):
 def get_support_resistance(prices):
     return np.min(prices[-20:]), np.max(prices[-20:])
 
-# ==============================
-# Liquidity Sweep Detection
-# ==============================
 def detect_liquidity_sweep(prices, window=20):
     if len(prices) < window:
         return 0
-
     recent = prices[-window:]
     high = np.max(recent)
     low = np.min(recent)
-
     last = prices[-1]
     prev = prices[-2]
 
@@ -96,9 +107,6 @@ def detect_liquidity_sweep(prices, window=20):
         return 1
     return 0
 
-# ==============================
-# Data Status
-# ==============================
 def get_data_status(candles):
     if len(candles) < 20:
         return "⚠️ بيانات غير كافية"
@@ -171,9 +179,6 @@ def run_collector():
 
     st.success("✅ Done")
 
-# ==============================
-# Button (موجود بدون تغيير)
-# ==============================
 if st.button("🔄 Update"):
     run_collector()
 
@@ -184,12 +189,10 @@ data = load_github_data()
 rows = []
 
 # ==============================
-# AI + Sweep + Status
+# AI
 # ==============================
 for coin_data in data:
-    coin = coin_data.get("coin")
     candles = coin_data.get("candles", [])
-
     if len(candles) < 25:
         continue
 
@@ -210,7 +213,6 @@ for coin_data in data:
         sma_long = pd.Series(prices[i-30:i]).mean() if i>=30 else sma_short
 
         support, resistance = get_support_resistance(prices[i-20:i])
-
         sweep = detect_liquidity_sweep(prices[i-20:i])
 
         score = 0
@@ -237,9 +239,6 @@ for coin_data in data:
 
 df_ai = pd.DataFrame(rows)
 
-# ==============================
-# Train AI
-# ==============================
 if len(df_ai) > 50:
 
     X = df_ai[["rsi","drop","volx","change","macd_diff","bb_lower_diff","sma_short","sma_long","score","sweep"]]
@@ -273,7 +272,6 @@ if len(df_ai) > 50:
         sma_long = pd.Series(prices[-30:]).mean() if len(prices)>=30 else sma_short
 
         support, resistance = get_support_resistance(prices)
-
         sweep = detect_liquidity_sweep(prices[-20:])
 
         score = 0
@@ -314,6 +312,20 @@ if len(df_ai) > 50:
         })
 
     df = pd.DataFrame(latest_rows)
+
+    # ==============================
+    # 🔔 ALERT
+    # ==============================
+    buy_signals = df[df["Signal"].isin(["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"])]
+
+    if not buy_signals.empty:
+        st.warning("🚨 إشارات شراء قوية!")
+
+        play_sound()  # 🔊 صوت
+
+        for _, row in buy_signals.iterrows():
+            st.success(f"{row['Coin']} | {row['Signal']} | Chance: {row['Chance %']}%")
+
     st.dataframe(df.sort_values("Chance %", ascending=False), use_container_width=True)
 
 else:
