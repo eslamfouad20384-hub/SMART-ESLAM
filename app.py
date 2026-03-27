@@ -7,18 +7,22 @@ import os
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import joblib
+
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Reversal Scanner PRO + JSON")
+st.title("🚀 Smart Crypto Reversal Scanner PRO + AI ML")
 
 # ==============================
 # إعدادات
 # ==============================
-MIN_VOLUME = 10_000_000
-RSI_PERIOD = 14
 JSON_FILE = "signals.json"
+MODEL_FILE = "ai_model.pkl"
+SCALER_FILE = "scaler.pkl"
 
 # ==============================
-# تحميل JSON
+# JSON
 # ==============================
 def load_json():
     if not os.path.exists(JSON_FILE):
@@ -30,13 +34,9 @@ def save_json(data):
     with open(JSON_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# ==============================
-# حفظ الإشارة
-# ==============================
 def save_signal(signal):
     data = load_json()
 
-    # منع التكرار (نفس العملة في نفس اليوم)
     today = datetime.now().strftime("%Y-%m-%d")
     for item in data:
         if item["Coin"] == signal["Coin"] and item["date"] == today:
@@ -49,7 +49,7 @@ def save_signal(signal):
     save_json(data)
 
 # ==============================
-# جلب العملات
+# API
 # ==============================
 @st.cache_data(ttl=300)
 def get_coins():
@@ -63,24 +63,74 @@ def get_coins():
     return requests.get(url, params=params).json()
 
 # ==============================
-# RSI
+# RSI احترافي (Wilder)
 # ==============================
 def calculate_rsi(prices, period=14):
-    delta = np.diff(prices)
-    gain = np.maximum(delta, 0)
-    loss = -np.minimum(delta, 0)
+    prices = np.array(prices)
 
-    if len(gain) < period:
+    if len(prices) < period + 1:
         return 50
 
-    avg_gain = np.mean(gain[:period])
-    avg_loss = np.mean(loss[:period])
+    deltas = np.diff(prices)
 
-    if avg_loss == 0:
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+
+    avg_gain = np.zeros_like(prices)
+    avg_loss = np.zeros_like(prices)
+
+    avg_gain[period] = np.mean(gains[:period])
+    avg_loss[period] = np.mean(losses[:period])
+
+    for i in range(period + 1, len(prices)):
+        avg_gain[i] = (avg_gain[i-1] * (period - 1) + gains[i-1]) / period
+        avg_loss[i] = (avg_loss[i-1] * (period - 1) + losses[i-1]) / period
+
+    if avg_loss[-1] == 0:
         return 100
 
-    rs = avg_gain / avg_loss
+    rs = avg_gain[-1] / avg_loss[-1]
     return 100 - (100 / (1 + rs))
+
+# ==============================
+# AI Model Training (مرة واحدة)
+# ==============================
+def train_model():
+    X = []
+    y = []
+
+    for _ in range(2000):
+        drop = np.random.uniform(-80, 10)
+        rsi = np.random.uniform(10, 90)
+        vol = np.random.uniform(0.5, 3)
+        support = np.random.uniform(0, 1)
+        trend = np.random.randint(0, 2)
+
+        label = 1 if (drop < -20 and rsi < 40 and vol > 1.2) else 0
+
+        X.append([drop, rsi, vol, support, trend])
+        y.append(label)
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    model = RandomForestClassifier(n_estimators=100)
+    model.fit(X_scaled, y)
+
+    joblib.dump(model, MODEL_FILE)
+    joblib.dump(scaler, SCALER_FILE)
+
+# ==============================
+# Load Model
+# ==============================
+def load_model():
+    if not os.path.exists(MODEL_FILE):
+        train_model()
+
+    model = joblib.load(MODEL_FILE)
+    scaler = joblib.load(SCALER_FILE)
+
+    return model, scaler
 
 # ==============================
 # تحليل العملة
@@ -109,62 +159,45 @@ def analyze_coin(coin):
 
         # RSI
         rsi_now = calculate_rsi(prices[-15:])
-        rsi_prev = calculate_rsi(prices[-16:-1])
-        rsi_condition = rsi_now < 35 and rsi_now > rsi_prev
 
         # Volume
         avg_volume = volumes[:-1].mean()
         current_volume = volumes[-1]
-        volume_condition = current_volume > avg_volume * 1.5
 
         # Support
         recent_prices = prices[-20:]
         support_zone = np.percentile(recent_prices, 20)
-        near_support = current_price <= support_zone * 1.1
 
         # Trend
         ema_20 = pd.Series(prices).ewm(span=20).mean().values
-        ema_condition = current_price > ema_20[-1]
+        trend_condition = current_price > ema_20[-1]
 
-        recent_lows = prices[-5:]
-        higher_low = recent_lows[-1] > recent_lows.min()
+        # ==============================
+        # AI MODEL
+        # ==============================
+        model, scaler = load_model()
 
-        trend_condition = ema_condition or higher_low
+        features = np.array([[
+            drop_percent,
+            rsi_now,
+            current_volume / avg_volume if avg_volume > 0 else 1,
+            support_zone / current_price,
+            1 if trend_condition else 0
+        ]])
 
-        # Candle
-        last = prices[-1]
-        prev = prices[-2]
-        prev2 = prices[-3]
+        features_scaled = scaler.transform(features)
 
-        bullish_engulfing = (prev < prev2) and (last > prev) and (last > prev2)
-        body = abs(last - prev)
-        lower_shadow = abs(prev - prev2)
-        hammer = lower_shadow > body * 2
+        ai_prob = model.predict_proba(features_scaled)[0][1]
+        ai_score = ai_prob * 100
 
-        candle_signal = bullish_engulfing or hammer
-
-        # Smart reversal
-        strong_drop = drop_percent < -40
-        bounce_started = current_price > prices[-3]
-        smart_reversal = strong_drop and bounce_started
-
-        # Score
-        score = 0
-        if drop_percent < -25: score += 2
-        if rsi_condition: score += 2
-        if volume_condition: score += 2
-        if near_support: score += 2
-        if trend_condition: score += 2
-        if candle_signal: score += 2
-        if smart_reversal: score += 2
-
-        probability = min(score * 8, 95)
-
-        if score >= 10:
+        # ==============================
+        # Signal
+        # ==============================
+        if ai_score >= 80:
             signal = "🚀 STRONG BUY"
-        elif score >= 8:
+        elif ai_score >= 65:
             signal = "🔥 BUY"
-        elif score >= 6:
+        elif ai_score >= 50:
             signal = "⏳ EARLY"
         else:
             signal = "❌ NO"
@@ -176,24 +209,21 @@ def analyze_coin(coin):
             "RSI": round(rsi_now, 2),
             "Vol x": round(current_volume / avg_volume, 2),
             "Support": round(support_zone, 6),
-            "Score": score,
-            "Chance %": probability,
+            "AI Score": round(ai_score, 2),
             "Signal": signal
         }
 
-        # ==============================
-        # حفظ فقط الفرص القوية
-        # ==============================
-        if score >= 8:
+        if ai_score >= 70:
             save_signal(result)
 
         return result
 
-    except:
+    except Exception as e:
+        print(e)
         return None
 
 # ==============================
-# تشغيل الفحص
+# Scan
 # ==============================
 if st.button("🔍 Scan السوق بالكامل"):
 
@@ -210,21 +240,21 @@ if st.button("🔍 Scan السوق بالكامل"):
     df = pd.DataFrame(results)
 
     if not df.empty:
-        df = df.sort_values(by="Score", ascending=False)
-        df = df[df["Score"] >= 6]
+        df = df.sort_values(by="AI Score", ascending=False)
+        df = df[df["AI Score"] >= 50]
 
-        st.success(f"🔥 تم العثور على {len(df)} فرصة قوية")
+        st.success(f"🔥 تم العثور على {len(df)} فرصة")
         st.dataframe(df, use_container_width=True)
 
     else:
-        st.warning("❌ مفيش فرص حالياً")
+        st.warning("❌ مفيش فرص")
 
 # ==============================
-# عرض البيانات المحفوظة
+# History
 # ==============================
 if st.checkbox("📁 عرض الصفقات المحفوظة"):
     data = load_json()
     if data:
         st.dataframe(pd.DataFrame(data))
     else:
-        st.info("لسه مفيش بيانات محفوظة")
+        st.info("لا يوجد بيانات")
