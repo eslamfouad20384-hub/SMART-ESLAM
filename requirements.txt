@@ -5,3 +5,4 @@ requests
 scikit-learn
 PyGithub
 joblib
+streamlit-autorefresh
