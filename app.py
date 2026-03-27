@@ -19,7 +19,7 @@ st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Alerts)")
 st_autorefresh(interval=180000, key="auto_refresh")
 
 # ==============================
-# 🔔 Telegram (FROM SECRETS)
+# 🔔 Telegram
 # ==============================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -47,16 +47,26 @@ def play_sound():
     try:
         with open("alert.mp3", "rb") as f:
             sound_bytes = f.read()
+
         b64 = base64.b64encode(sound_bytes).decode()
 
         audio_html = f"""
-        <audio autoplay>
-        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+        <audio autoplay controls>
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
         """
-        st.markdown(audio_html, unsafe_allow_html=True)
+
+        st.components.v1.html(audio_html, height=0)
+
     except:
         pass
+
+
+# ==============================
+# ⏱️ Signal Repeat Control
+# ==============================
+if "last_signal_time" not in st.session_state:
+    st.session_state.last_signal_time = {}
 
 
 # ==============================
@@ -97,7 +107,7 @@ def calculate_rsi(prices, period=14):
     loss = np.where(delta < 0, -delta, 0)
     avg_gain = pd.Series(gain).ewm(alpha=1/period).mean()
     avg_loss = pd.Series(loss).ewm(alpha=1/period).mean()
-    rs = avg_gain / avg_loss
+    rs = avg_gain / (avg_loss + 1e-9)
     return 100 - (100 / (1 + rs)).iloc[-1]
 
 
@@ -223,7 +233,7 @@ rows = []
 
 
 # ==============================
-# AI SCAN
+# AI SCAN + ALERTS
 # ==============================
 for coin_data in data:
     candles = coin_data.get("candles", [])
@@ -328,8 +338,6 @@ if len(df_ai) > 50:
 
         if sweep == 1:
             signal = "🔥 Bullish Sweep Buy"
-        elif sweep == -1:
-            signal = "⚠️ Bearish Sweep Fakeout"
         elif score >= 8:
             signal = "🔥 Strong Buy"
         elif score >= 5:
@@ -348,19 +356,27 @@ if len(df_ai) > 50:
         ]])[0][1] * 100
 
         # ==============================
-        # 🔔 ALERTS
+        # 🔥 REPEAT ALERT CONTROL (10 min)
         # ==============================
-        if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
-            msg = (
-                f"🚀 BUY ALERT\n"
-                f"Coin: {coin}\n"
-                f"Price: {prices[-1]:.4f}\n"
-                f"Chance: {chance:.2f}%\n"
-                f"Signal: {signal}"
-            )
+        key = f"{coin}_{signal}"
+        now = time.time()
 
-            send_telegram(msg)
-            play_sound()
+        last_time = st.session_state.last_signal_time.get(key, 0)
+
+        if now - last_time >= 600:
+            st.session_state.last_signal_time[key] = now
+
+            if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
+                msg = (
+                    f"🚀 BUY ALERT\n"
+                    f"Coin: {coin}\n"
+                    f"Price: {prices[-1]:.4f}\n"
+                    f"Chance: {chance:.2f}%\n"
+                    f"Signal: {signal}"
+                )
+
+                send_telegram(msg)
+                play_sound()
 
         latest_rows.append({
             "Coin": coin,
