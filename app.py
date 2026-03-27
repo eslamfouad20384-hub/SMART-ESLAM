@@ -297,6 +297,7 @@ if len(df_ai) > 50:
             "Coin": coin,
             "Price": round(prices[-1],2),
             "RSI": round(rsi,2),
+            "Drop %": round(drop,2),
             "Volume x": round(volx,2),
             "Support": round(support,2),
             "Resistance": round(resistance,2),
