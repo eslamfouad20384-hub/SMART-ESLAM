@@ -1,184 +1,339 @@
 import streamlit as st
+import pandas as pd
+import numpy as np
 import requests
-import json
-import base64
 import time
+from concurrent.futures import ThreadPoolExecutor
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from github import Github, Auth
+import json
 
-# =========================
-# 🔑 GitHub Settings
-# =========================
-GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
-REPO = "eslamfouad20384-hub/SMART-ESLAM"
-FILE_PATH = "data.json"
-BRANCH = "data"
-
-# =========================
-# 📥 Load from GitHub
-# =========================
-def load_json():
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-
-    for branch in ["data", "main"]:
-        url = f"https://api.github.com/repos/{REPO}/contents/{FILE_PATH}?ref={branch}"
-        r = requests.get(url, headers=headers)
-
-        if r.status_code == 200:
-            content = r.json()["content"]
-            decoded = base64.b64decode(content).decode("utf-8")
-            return json.loads(decoded)
-
-    return []
-
-# =========================
-# 📤 Save to GitHub
-# =========================
-def save_json(data):
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json"
-    }
-
-    url_get = f"https://api.github.com/repos/{REPO}/contents/{FILE_PATH}?ref={BRANCH}"
-    r = requests.get(url_get, headers=headers)
-
-    sha = r.json().get("sha") if r.status_code == 200 else None
-
-    content = base64.b64encode(
-        json.dumps(data, indent=4).encode("utf-8")
-    ).decode("utf-8")
-
-    payload = {
-        "message": "update data.json",
-        "content": content,
-        "branch": BRANCH
-    }
-
-    if sha:
-        payload["sha"] = sha
-
-    url_put = f"https://api.github.com/repos/{REPO}/contents/{FILE_PATH}"
-    res = requests.put(url_put, headers=headers, json=payload)
-
-    return res.status_code in [200, 201]
-
-# =========================
-# 🧠 Generate ID
-# =========================
-def generate_id(symbol, direction, price):
-    return f"{symbol}_{direction}_{price}"
-
-# =========================
-# 🔄 Add or Update Signal (No duplicates)
-# =========================
-def upsert_signal(data, new_signal):
-    signal_id = generate_id(
-        new_signal["symbol"],
-        new_signal["direction"],
-        new_signal["entry_price"]
-    )
-
-    for item in data:
-        if item.get("id") == signal_id:
-            item.update(new_signal)
-            item["id"] = signal_id
-            item["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            return data, "updated"
-
-    new_signal["id"] = signal_id
-    new_signal["created_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    data.append(new_signal)
-
-    return data, "added"
-
-# =========================
-# 🧠 Dynamic Market Update (NO Binance)
-# =========================
-def dynamic_update(signal, current_price):
-    entry = signal["entry_price"]
-    sl = signal.get("stop_loss")
-
-    if signal["direction"] == "LONG":
-        move = current_price - entry
-    else:
-        move = entry - current_price
-
-    # 📈 confidence update
-    if move > 0:
-        signal["confidence"] = min(100, signal.get("confidence", 50) + 2)
-
-        # trailing stop
-        if sl:
-            if signal["direction"] == "LONG":
-                signal["stop_loss"] = max(sl, current_price * 0.99)
-            else:
-                signal["stop_loss"] = min(sl, current_price * 1.01)
-
-    else:
-        signal["confidence"] = max(0, signal.get("confidence", 50) - 3)
-
-    # 🚨 auto close
-    if signal.get("confidence", 50) < 30:
-        signal["status"] = "CLOSED"
-
-    signal["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-
-    return signal
-
-# =========================
-# 🎨 Streamlit UI
-# =========================
 st.set_page_config(layout="wide")
-st.title("🚀 Smart AI Trading System (GitHub + Dynamic)")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (Enhanced)")
 
-data = load_json()
+# ==============================
+# 🎨 Dark Mode Table
+# ==============================
+st.markdown("""
+<style>
+[data-testid="stDataFrame"] {
+    background-color: #0e1117;
+    color: white;
+}
+thead tr th {
+    background-color: #111 !important;
+    color: white !important;
+}
+tbody tr td {
+    background-color: #0e1117 !important;
+    color: white !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
-st.subheader("📥 Current Data")
-st.write(data)
+# ==============================
+# GitHub setup (FIXED)
+# ==============================
+GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
+REPO_NAME = st.secrets["GITHUB"]["REPO"]
+BRANCH = st.secrets["GITHUB"]["BRANCH"]
 
-# =========================
-# ➕ Add Signal
-# =========================
-symbol = st.text_input("Symbol")
-direction = st.selectbox("Direction", ["LONG", "SHORT"])
-entry_price = st.number_input("Entry Price")
-stop_loss = st.number_input("Stop Loss")
-take_profit = st.number_input("Take Profit")
+FILE_PATH = "data.json"
 
-if st.button("➕ Add / Update Signal"):
+g = Github(auth=Auth.Token(GITHUB_TOKEN))
+repo = g.get_repo(REPO_NAME)
 
-    new_signal = {
-        "symbol": symbol,
-        "direction": direction,
-        "entry_price": entry_price,
-        "stop_loss": stop_loss,
-        "take_profit": take_profit,
-        "confidence": 50,
-        "status": "OPEN"
-    }
+# ==============================
+# Load from GitHub (FIXED)
+# ==============================
+def load_github_data():
+    try:
+        file = repo.get_contents(FILE_PATH, ref=BRANCH)
+        content = file.decoded_content.decode("utf-8")
+        return json.loads(content)
+    except Exception as e:
+        st.warning(f"⚠️ مشكلة في قراءة الملف: {e}")
+        return []
 
-    data, status = upsert_signal(data, new_signal)
-    save_json(data)
+# ==============================
+# Save to GitHub (FIXED)
+# ==============================
+def save_github_data(data):
+    content = json.dumps(data, indent=4)
 
-    if status == "updated":
-        st.info("🔄 تم تحديث الصفقة")
-    else:
-        st.success("➕ تم إضافة صفقة جديدة")
-
-# =========================
-# 🧠 Manual Dynamic Update
-# =========================
-st.subheader("🧠 Dynamic Update (Manual Price)")
-
-for signal in data:
-    if signal.get("status") == "OPEN":
-
-        current_price = st.number_input(
-            f"{signal['symbol']} current price",
-            key=signal["id"]
+    try:
+        file = repo.get_contents(FILE_PATH, ref=BRANCH)
+        repo.update_file(
+            file.path,
+            "update data.json",
+            content,
+            file.sha,
+            branch=BRANCH
+        )
+    except:
+        repo.create_file(
+            FILE_PATH,
+            "create data.json",
+            content,
+            branch=BRANCH
         )
 
-        signal = dynamic_update(signal, current_price)
+# ==============================
+# Indicators
+# ==============================
+def calculate_rsi(prices, period=14):
+    delta = np.diff(prices)
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = pd.Series(gain).ewm(alpha=1/period).mean()
+    avg_loss = pd.Series(loss).ewm(alpha=1/period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1]
 
-if st.button("🔄 Save Updates"):
-    save_json(data)
-    st.success("تم تحديث كل الصفقات 🔥")
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    ema_fast = pd.Series(prices).ewm(span=fast, adjust=False).mean()
+    ema_slow = pd.Series(prices).ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line.iloc[-1], signal_line.iloc[-1]
+
+def calculate_bollinger(prices, period=20, mult=2):
+    sma = pd.Series(prices).rolling(window=period).mean()
+    std = pd.Series(prices).rolling(window=period).std()
+    upper = sma + mult*std
+    lower = sma - mult*std
+    return upper.iloc[-1], lower.iloc[-1]
+
+def get_support_resistance(prices):
+    support = np.min(prices[-20:])
+    resistance = np.max(prices[-20:])
+    return support, resistance
+
+# ==============================
+# API (CoinGecko - no Binance)
+# ==============================
+def get_coins():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
+    return requests.get(url, params=params).json()
+
+def fetch_data(coin_id, days=30):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency":"usd","days":days}
+    return requests.get(url, params=params).json()
+
+# ==============================
+# Smart update
+# ==============================
+def should_update(data, coin):
+    for row in data:
+        if row["coin"] == coin:
+            candles = row.get("candles", [])
+            if not candles:
+                return True
+            last = candles[-1]["timestamp"] / 1000
+            if time.time() - last < 600:
+                return False
+    return True
+
+# ==============================
+# Collector
+# ==============================
+def run_collector():
+    st.info("⏳ تحديث البيانات...")
+    coins = get_coins()
+    data = load_github_data()
+    updated = False
+
+    for i in range(0, len(coins), 10):
+        batch = coins[i:i+10]
+
+        def work(c):
+            nonlocal data, updated
+            try:
+                symbol = c["symbol"].upper()
+
+                if not should_update(data, symbol):
+                    return
+
+                d = fetch_data(c["id"])
+                prices = [p[1] for p in d.get("prices",[])]
+                vols = [v[1] for v in d.get("total_volumes",[])]
+
+                candles = []
+                for i in range(len(prices)):
+                    candles.append({
+                        "timestamp": int(d["prices"][i][0]),
+                        "price": float(prices[i]),
+                        "volume": float(vols[i]) if i < len(vols) else 0
+                    })
+
+                for row in data:
+                    if row["coin"] == symbol:
+                        row["candles"] = candles
+                        updated = True
+                        return
+
+                data.append({"coin":symbol,"candles":candles})
+                updated = True
+
+            except Exception as e:
+                print(e)
+
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            ex.map(work, batch)
+
+        time.sleep(2)
+
+    if updated:
+        save_github_data(data)
+
+    st.success("✅ تم التحديث")
+
+# ==============================
+# Button
+# ==============================
+if st.button("🔄 تحديث"):
+    run_collector()
+
+# ==============================
+# Load data
+# ==============================
+data = load_github_data()
+rows = []
+
+# ==============================
+# AI Dataset
+# ==============================
+for coin_data in data:
+    candles = coin_data.get("candles", [])
+    if len(candles) < 20:
+        continue
+
+    prices = np.array([c["price"] for c in candles])
+    vols = np.array([c["volume"] for c in candles])
+
+    for i in range(15, len(prices)-3):
+        rsi = calculate_rsi(prices[i-15:i])
+        drop = ((prices[i] - prices[:i].max()) / prices[:i].max()) * 100
+        avg_vol = vols[i-10:i].mean()
+        volx = vols[i] / avg_vol if avg_vol>0 else 1
+        change = ((prices[i] - prices[i-3]) / prices[i-3]) * 100
+
+        macd_line, signal_line = calculate_macd(prices[i-26:i]) if i>=26 else (0,0)
+        upper_bb, lower_bb = calculate_bollinger(prices[i-20:i]) if i>=20 else (0,0)
+
+        sma_short = pd.Series(prices[i-10:i]).mean()
+        sma_long = pd.Series(prices[i-30:i]).mean() if i>=30 else sma_short
+
+        score = 0
+        if rsi < 35: score += 3
+        if drop < -20: score += 3
+        if volx > 1.5: score += 2
+        if change > 0: score += 2
+        if macd_line > signal_line: score +=1
+        if prices[i] < lower_bb: score +=1
+
+        target = 1 if prices[i+3] > prices[i] else 0
+
+        rows.append({
+            "rsi": rsi,
+            "drop": drop,
+            "volx": volx,
+            "change": change,
+            "macd_diff": macd_line - signal_line,
+            "bb_lower_diff": prices[i] - lower_bb,
+            "sma_short": sma_short,
+            "sma_long": sma_long,
+            "score": score,
+            "target": target
+        })
+
+df_ai = pd.DataFrame(rows)
+
+# ==============================
+# Train AI
+# ==============================
+if len(df_ai) > 50:
+
+    X = df_ai[["rsi","drop","volx","change","macd_diff","bb_lower_diff","sma_short","sma_long","score"]]
+    y = df_ai["target"]
+
+    model = RandomForestClassifier(n_estimators=200)
+    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
+    model.fit(X_train,y_train)
+
+    latest_rows = []
+
+    for coin_data in data:
+        coin = coin_data["coin"]
+        candles = coin_data.get("candles", [])
+
+        if len(candles) < 20:
+            continue
+
+        prices = np.array([c["price"] for c in candles])
+        vols = np.array([c["volume"] for c in candles])
+
+        rsi = calculate_rsi(prices[-15:])
+        drop = ((prices[-1] - prices.max()) / prices.max()) * 100
+        avg_vol = vols[-10:].mean()
+        volx = vols[-1] / avg_vol if avg_vol>0 else 1
+        change = ((prices[-1] - prices[-3]) / prices[-3]) * 100
+
+        macd_line, signal_line = calculate_macd(prices[-26:]) if len(prices)>=26 else (0,0)
+        upper_bb, lower_bb = calculate_bollinger(prices[-20:]) if len(prices)>=20 else (0,0)
+
+        sma_short = pd.Series(prices[-10:]).mean()
+        sma_long = pd.Series(prices[-30:]).mean() if len(prices)>=30 else sma_short
+
+        support, resistance = get_support_resistance(prices)
+
+        score = 0
+        if rsi < 35: score += 3
+        if drop < -20: score += 3
+        if volx > 1.5: score += 2
+        if change > 0: score += 2
+        if macd_line > signal_line: score +=1
+        if prices[-1] < lower_bb: score +=1
+
+        if len(candles) >= 30:
+            data_status = "🟢 Good"
+        elif len(candles) >= 20:
+            data_status = "🟡 Moderate"
+        else:
+            data_status = "🔴 Low"
+
+        if score >= 8:
+            signal = "🔥 Strong Buy"
+        elif score >= 5:
+            signal = "🚀 Buy"
+        elif score >= 3:
+            signal = "🟠 Hold"
+        else:
+            signal = "❌ No Trade"
+
+        chance = model.predict_proba([[rsi,drop,volx,change,macd_line-signal_line,prices[-1]-lower_bb,sma_short,sma_long,score]])[0][1]*100
+
+        latest_rows.append({
+            "Coin": coin,
+            "Price": round(prices[-1],2),
+            "Drop %": round(drop,2),
+            "RSI": round(rsi,2),
+            "Volume x": round(volx,2),
+            "Support": round(support,2),
+            "Resistance": round(resistance,2),
+            "Score": score,
+            "Chance %": round(chance,2),
+            "Signal": signal,
+            "Data": data_status
+        })
+
+    df = pd.DataFrame(latest_rows)
+    df = df.sort_values("Chance %", ascending=False)
+    st.dataframe(df, use_container_width=True)
+
+else:
+    st.warning("⚠️ البيانات غير كافية للـ AI")
