@@ -10,7 +10,7 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Sweep Detection)")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Sweep + Data Status)")
 
 # ==============================
 # GitHub setup
@@ -71,7 +71,7 @@ def get_support_resistance(prices):
     return np.min(prices[-20:]), np.max(prices[-20:])
 
 # ==============================
-# 🚨 Liquidity Sweep Detection
+# Liquidity Sweep Detection
 # ==============================
 def detect_liquidity_sweep(prices, window=20):
     if len(prices) < window:
@@ -84,15 +84,22 @@ def detect_liquidity_sweep(prices, window=20):
     last = prices[-1]
     prev = prices[-2]
 
-    # Fake breakout above resistance
     if last > high and last < prev:
         return -1
-
-    # Fake breakdown below support
     if last < low and last > prev:
         return 1
-
     return 0
+
+# ==============================
+# Data Status
+# ==============================
+def get_data_status(candles):
+    if len(candles) < 20:
+        return "⚠️ بيانات غير كافية"
+    elif len(candles) < 60:
+        return "🟡 بيانات متوسطة"
+    else:
+        return "🟢 بيانات قوية"
 
 # ==============================
 # API
@@ -171,10 +178,12 @@ data = load_github_data()
 rows = []
 
 # ==============================
-# AI Dataset + Sweep
+# AI + Sweep + Status
 # ==============================
 for coin_data in data:
+    coin = coin_data.get("coin")
     candles = coin_data.get("candles", [])
+
     if len(candles) < 25:
         continue
 
@@ -193,6 +202,8 @@ for coin_data in data:
 
         sma_short = pd.Series(prices[i-10:i]).mean()
         sma_long = pd.Series(prices[i-30:i]).mean() if i>=30 else sma_short
+
+        support, resistance = get_support_resistance(prices[i-20:i])
 
         sweep = detect_liquidity_sweep(prices[i-20:i])
 
@@ -291,7 +302,8 @@ if len(df_ai) > 50:
             "Resistance": round(resistance,2),
             "Score": score,
             "Chance %": round(chance,2),
-            "Signal": signal
+            "Signal": signal,
+            "Data Status": get_data_status(candles)
         })
 
     df = pd.DataFrame(latest_rows)
