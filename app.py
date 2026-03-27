@@ -10,74 +10,36 @@ from github import Github, Auth
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX (Enhanced)")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Sweep Detection)")
 
 # ==============================
-# 🎨 Dark Mode Table
-# ==============================
-st.markdown("""
-<style>
-[data-testid="stDataFrame"] {
-    background-color: #0e1117;
-    color: white;
-}
-thead tr th {
-    background-color: #111 !important;
-    color: white !important;
-}
-tbody tr td {
-    background-color: #0e1117 !important;
-    color: white !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ==============================
-# GitHub setup (FIXED)
+# GitHub setup
 # ==============================
 GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
 REPO_NAME = st.secrets["GITHUB"]["REPO"]
 BRANCH = st.secrets["GITHUB"]["BRANCH"]
-
 FILE_PATH = "data.json"
 
 g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
 # ==============================
-# Load from GitHub (FIXED)
+# Load / Save
 # ==============================
 def load_github_data():
     try:
         file = repo.get_contents(FILE_PATH, ref=BRANCH)
-        content = file.decoded_content.decode("utf-8")
-        return json.loads(content)
-    except Exception as e:
-        st.warning(f"⚠️ مشكلة في قراءة الملف: {e}")
+        return json.loads(file.decoded_content.decode("utf-8"))
+    except:
         return []
 
-# ==============================
-# Save to GitHub (FIXED)
-# ==============================
 def save_github_data(data):
     content = json.dumps(data, indent=4)
-
     try:
         file = repo.get_contents(FILE_PATH, ref=BRANCH)
-        repo.update_file(
-            file.path,
-            "update data.json",
-            content,
-            file.sha,
-            branch=BRANCH
-        )
+        repo.update_file(file.path, "update", content, file.sha, branch=BRANCH)
     except:
-        repo.create_file(
-            FILE_PATH,
-            "create data.json",
-            content,
-            branch=BRANCH
-        )
+        repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
 
 # ==============================
 # Indicators
@@ -89,60 +51,67 @@ def calculate_rsi(prices, period=14):
     avg_gain = pd.Series(gain).ewm(alpha=1/period).mean()
     avg_loss = pd.Series(loss).ewm(alpha=1/period).mean()
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1]
+    return 100 - (100 / (1 + rs)).iloc[-1]
 
-def calculate_macd(prices, fast=12, slow=26, signal=9):
-    ema_fast = pd.Series(prices).ewm(span=fast, adjust=False).mean()
-    ema_slow = pd.Series(prices).ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    return macd_line.iloc[-1], signal_line.iloc[-1]
+def calculate_macd(prices):
+    ema_fast = pd.Series(prices).ewm(span=12).mean()
+    ema_slow = pd.Series(prices).ewm(span=26).mean()
+    macd = ema_fast - ema_slow
+    signal = macd.ewm(span=9).mean()
+    return macd.iloc[-1], signal.iloc[-1]
 
-def calculate_bollinger(prices, period=20, mult=2):
-    sma = pd.Series(prices).rolling(window=period).mean()
-    std = pd.Series(prices).rolling(window=period).std()
-    upper = sma + mult*std
-    lower = sma - mult*std
+def calculate_bollinger(prices):
+    sma = pd.Series(prices).rolling(20).mean()
+    std = pd.Series(prices).rolling(20).std()
+    upper = sma + 2 * std
+    lower = sma - 2 * std
     return upper.iloc[-1], lower.iloc[-1]
 
 def get_support_resistance(prices):
-    support = np.min(prices[-20:])
-    resistance = np.max(prices[-20:])
-    return support, resistance
+    return np.min(prices[-20:]), np.max(prices[-20:])
 
 # ==============================
-# API (CoinGecko - no Binance)
+# 🚨 Liquidity Sweep Detection
+# ==============================
+def detect_liquidity_sweep(prices, window=20):
+    if len(prices) < window:
+        return 0
+
+    recent = prices[-window:]
+    high = np.max(recent)
+    low = np.min(recent)
+
+    last = prices[-1]
+    prev = prices[-2]
+
+    # Fake breakout above resistance
+    if last > high and last < prev:
+        return -1
+
+    # Fake breakdown below support
+    if last < low and last > prev:
+        return 1
+
+    return 0
+
+# ==============================
+# API
 # ==============================
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
     return requests.get(url, params=params).json()
 
-def fetch_data(coin_id, days=30):
+def fetch_data(coin_id):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    params = {"vs_currency":"usd","days":days}
+    params = {"vs_currency":"usd","days":30}
     return requests.get(url, params=params).json()
-
-# ==============================
-# Smart update
-# ==============================
-def should_update(data, coin):
-    for row in data:
-        if row["coin"] == coin:
-            candles = row.get("candles", [])
-            if not candles:
-                return True
-            last = candles[-1]["timestamp"] / 1000
-            if time.time() - last < 600:
-                return False
-    return True
 
 # ==============================
 # Collector
 # ==============================
 def run_collector():
-    st.info("⏳ تحديث البيانات...")
+    st.info("⏳ Updating data...")
     coins = get_coins()
     data = load_github_data()
     updated = False
@@ -154,11 +123,8 @@ def run_collector():
             nonlocal data, updated
             try:
                 symbol = c["symbol"].upper()
-
-                if not should_update(data, symbol):
-                    return
-
                 d = fetch_data(c["id"])
+
                 prices = [p[1] for p in d.get("prices",[])]
                 vols = [v[1] for v in d.get("total_volumes",[])]
 
@@ -179,8 +145,8 @@ def run_collector():
                 data.append({"coin":symbol,"candles":candles})
                 updated = True
 
-            except Exception as e:
-                print(e)
+            except:
+                pass
 
         with ThreadPoolExecutor(max_workers=5) as ex:
             ex.map(work, batch)
@@ -190,12 +156,12 @@ def run_collector():
     if updated:
         save_github_data(data)
 
-    st.success("✅ تم التحديث")
+    st.success("✅ Done")
 
 # ==============================
 # Button
 # ==============================
-if st.button("🔄 تحديث"):
+if st.button("🔄 Update"):
     run_collector()
 
 # ==============================
@@ -205,21 +171,21 @@ data = load_github_data()
 rows = []
 
 # ==============================
-# AI Dataset
+# AI Dataset + Sweep
 # ==============================
 for coin_data in data:
     candles = coin_data.get("candles", [])
-    if len(candles) < 20:
+    if len(candles) < 25:
         continue
 
     prices = np.array([c["price"] for c in candles])
     vols = np.array([c["volume"] for c in candles])
 
-    for i in range(15, len(prices)-3):
+    for i in range(20, len(prices)-3):
+
         rsi = calculate_rsi(prices[i-15:i])
         drop = ((prices[i] - prices[:i].max()) / prices[:i].max()) * 100
-        avg_vol = vols[i-10:i].mean()
-        volx = vols[i] / avg_vol if avg_vol>0 else 1
+        volx = vols[i] / (vols[i-10:i].mean() + 1e-9)
         change = ((prices[i] - prices[i-3]) / prices[i-3]) * 100
 
         macd_line, signal_line = calculate_macd(prices[i-26:i]) if i>=26 else (0,0)
@@ -228,15 +194,15 @@ for coin_data in data:
         sma_short = pd.Series(prices[i-10:i]).mean()
         sma_long = pd.Series(prices[i-30:i]).mean() if i>=30 else sma_short
 
+        sweep = detect_liquidity_sweep(prices[i-20:i])
+
         score = 0
         if rsi < 35: score += 3
         if drop < -20: score += 3
         if volx > 1.5: score += 2
         if change > 0: score += 2
-        if macd_line > signal_line: score +=1
-        if prices[i] < lower_bb: score +=1
-
-        target = 1 if prices[i+3] > prices[i] else 0
+        if macd_line > signal_line: score += 1
+        if prices[i] < lower_bb: score += 1
 
         rows.append({
             "rsi": rsi,
@@ -248,7 +214,8 @@ for coin_data in data:
             "sma_short": sma_short,
             "sma_long": sma_long,
             "score": score,
-            "target": target
+            "sweep": sweep,
+            "target": 1 if prices[i+3] > prices[i] else 0
         })
 
 df_ai = pd.DataFrame(rows)
@@ -258,7 +225,7 @@ df_ai = pd.DataFrame(rows)
 # ==============================
 if len(df_ai) > 50:
 
-    X = df_ai[["rsi","drop","volx","change","macd_diff","bb_lower_diff","sma_short","sma_long","score"]]
+    X = df_ai[["rsi","drop","volx","change","macd_diff","bb_lower_diff","sma_short","sma_long","score","sweep"]]
     y = df_ai["target"]
 
     model = RandomForestClassifier(n_estimators=200)
@@ -271,7 +238,7 @@ if len(df_ai) > 50:
         coin = coin_data["coin"]
         candles = coin_data.get("candles", [])
 
-        if len(candles) < 20:
+        if len(candles) < 25:
             continue
 
         prices = np.array([c["price"] for c in candles])
@@ -279,8 +246,7 @@ if len(df_ai) > 50:
 
         rsi = calculate_rsi(prices[-15:])
         drop = ((prices[-1] - prices.max()) / prices.max()) * 100
-        avg_vol = vols[-10:].mean()
-        volx = vols[-1] / avg_vol if avg_vol>0 else 1
+        volx = vols[-1] / (vols[-10:].mean() + 1e-9)
         change = ((prices[-1] - prices[-3]) / prices[-3]) * 100
 
         macd_line, signal_line = calculate_macd(prices[-26:]) if len(prices)>=26 else (0,0)
@@ -291,22 +257,21 @@ if len(df_ai) > 50:
 
         support, resistance = get_support_resistance(prices)
 
+        sweep = detect_liquidity_sweep(prices[-20:])
+
         score = 0
         if rsi < 35: score += 3
         if drop < -20: score += 3
         if volx > 1.5: score += 2
         if change > 0: score += 2
-        if macd_line > signal_line: score +=1
-        if prices[-1] < lower_bb: score +=1
+        if macd_line > signal_line: score += 1
+        if prices[-1] < lower_bb: score += 1
 
-        if len(candles) >= 30:
-            data_status = "🟢 Good"
-        elif len(candles) >= 20:
-            data_status = "🟡 Moderate"
-        else:
-            data_status = "🔴 Low"
-
-        if score >= 8:
+        if sweep == 1:
+            signal = "🔥 Bullish Sweep Buy"
+        elif sweep == -1:
+            signal = "⚠️ Bearish Sweep Fakeout"
+        elif score >= 8:
             signal = "🔥 Strong Buy"
         elif score >= 5:
             signal = "🚀 Buy"
@@ -315,25 +280,22 @@ if len(df_ai) > 50:
         else:
             signal = "❌ No Trade"
 
-        chance = model.predict_proba([[rsi,drop,volx,change,macd_line-signal_line,prices[-1]-lower_bb,sma_short,sma_long,score]])[0][1]*100
+        chance = model.predict_proba([[rsi,drop,volx,change,macd_line-signal_line,prices[-1]-lower_bb,sma_short,sma_long,score,sweep]])[0][1]*100
 
         latest_rows.append({
             "Coin": coin,
             "Price": round(prices[-1],2),
-            "Drop %": round(drop,2),
             "RSI": round(rsi,2),
             "Volume x": round(volx,2),
             "Support": round(support,2),
             "Resistance": round(resistance,2),
             "Score": score,
             "Chance %": round(chance,2),
-            "Signal": signal,
-            "Data": data_status
+            "Signal": signal
         })
 
     df = pd.DataFrame(latest_rows)
-    df = df.sort_values("Chance %", ascending=False)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df.sort_values("Chance %", ascending=False), use_container_width=True)
 
 else:
-    st.warning("⚠️ البيانات غير كافية للـ AI")
+    st.warning("⚠️ Not enough data")
