@@ -12,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Reversal Scanner PRO + AI ML")
+st.title("🚀 Smart Crypto Scanner PRO + AI Trade Engine")
 
 # ==============================
 # إعدادات
@@ -93,11 +93,10 @@ def calculate_rsi(prices, period=14):
     return 100 - (100 / (1 + rs))
 
 # ==============================
-# AI Model Training (مرة واحدة)
+# AI MODEL
 # ==============================
 def train_model():
-    X = []
-    y = []
+    X, y = [], []
 
     for _ in range(2000):
         drop = np.random.uniform(-80, 10)
@@ -120,9 +119,6 @@ def train_model():
     joblib.dump(model, MODEL_FILE)
     joblib.dump(scaler, SCALER_FILE)
 
-# ==============================
-# Load Model
-# ==============================
 def load_model():
     if not os.path.exists(MODEL_FILE):
         train_model()
@@ -133,48 +129,50 @@ def load_model():
     return model, scaler
 
 # ==============================
-# تحليل العملة
+# تحليل العملة (Multi-Timeframe + Trade Engine)
 # ==============================
 def analyze_coin(coin):
     try:
         coin_id = coin["id"]
 
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-        params = {"vs_currency": "usd", "days": 30}
-        data = requests.get(url, params=params).json()
+        # ================= DAILY =================
+        daily = requests.get(
+            f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
+            params={"vs_currency": "usd", "days": 30}
+        ).json()
 
-        if "prices" not in data:
+        # ================= HOURLY =================
+        hourly = requests.get(
+            f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
+            params={"vs_currency": "usd", "days": 1, "interval": "hourly"}
+        ).json()
+
+        if "prices" not in daily or "prices" not in hourly:
             return None
 
-        prices = np.array([p[1] for p in data["prices"]])
-        volumes = np.array([v[1] for v in data["total_volumes"]])
+        daily_prices = np.array([p[1] for p in daily["prices"]])
+        hour_prices = np.array([p[1] for p in hourly["prices"]])
 
-        if len(prices) < 30:
-            return None
+        volumes = np.array([v[1] for v in daily["total_volumes"]])
 
-        current_price = prices[-1]
-        max_price = prices.max()
+        current_price = daily_prices[-1]
 
+        # ================= Indicators =================
+        max_price = daily_prices.max()
         drop_percent = ((current_price - max_price) / max_price) * 100
 
-        # RSI
-        rsi_now = calculate_rsi(prices[-15:])
+        rsi_now = calculate_rsi(daily_prices[-15:])
 
-        # Volume
         avg_volume = volumes[:-1].mean()
         current_volume = volumes[-1]
 
-        # Support
-        recent_prices = prices[-20:]
-        support_zone = np.percentile(recent_prices, 20)
+        support_zone = np.percentile(daily_prices[-20:], 20)
 
-        # Trend
-        ema_20 = pd.Series(prices).ewm(span=20).mean().values
-        trend_condition = current_price > ema_20[-1]
+        trend_condition = current_price > pd.Series(daily_prices).ewm(span=20).mean().values[-1]
 
-        # ==============================
-        # AI MODEL
-        # ==============================
+        hour_trend = hour_prices[-1] > np.mean(hour_prices[-5:])
+
+        # ================= AI =================
         model, scaler = load_model()
 
         features = np.array([[
@@ -185,22 +183,27 @@ def analyze_coin(coin):
             1 if trend_condition else 0
         ]])
 
-        features_scaled = scaler.transform(features)
+        ai_score = model.predict_proba(scaler.transform(features))[0][1] * 100
 
-        ai_prob = model.predict_proba(features_scaled)[0][1]
-        ai_score = ai_prob * 100
+        # ================= TRADE ENGINE =================
 
-        # ==============================
-        # Signal
-        # ==============================
-        if ai_score >= 80:
-            signal = "🚀 STRONG BUY"
-        elif ai_score >= 65:
-            signal = "🔥 BUY"
-        elif ai_score >= 50:
-            signal = "⏳ EARLY"
+        buy_condition = (
+            drop_percent < -15 and
+            rsi_now < 40 and
+            hour_trend
+        )
+
+        sell_condition = (
+            rsi_now > 70 or
+            (drop_percent > -5 and not hour_trend)
+        )
+
+        if buy_condition:
+            signal = "🟢 ENTRY BUY"
+        elif sell_condition:
+            signal = "🔴 EXIT / SELL"
         else:
-            signal = "❌ NO"
+            signal = "⏳ HOLD"
 
         result = {
             "Coin": coin["symbol"].upper(),
@@ -208,7 +211,6 @@ def analyze_coin(coin):
             "Drop %": round(drop_percent, 2),
             "RSI": round(rsi_now, 2),
             "Vol x": round(current_volume / avg_volume, 2),
-            "Support": round(support_zone, 6),
             "AI Score": round(ai_score, 2),
             "Signal": signal
         }
@@ -223,7 +225,7 @@ def analyze_coin(coin):
         return None
 
 # ==============================
-# Scan
+# SCAN
 # ==============================
 if st.button("🔍 Scan السوق بالكامل"):
 
@@ -241,18 +243,15 @@ if st.button("🔍 Scan السوق بالكامل"):
 
     if not df.empty:
         df = df.sort_values(by="AI Score", ascending=False)
-        df = df[df["AI Score"] >= 50]
-
-        st.success(f"🔥 تم العثور على {len(df)} فرصة")
+        st.success(f"🔥 تم العثور على {len(df)} عملة")
         st.dataframe(df, use_container_width=True)
-
     else:
         st.warning("❌ مفيش فرص")
 
 # ==============================
-# History
+# HISTORY
 # ==============================
-if st.checkbox("📁 عرض الصفقات المحفوظة"):
+if st.checkbox("📁 الصفقات المحفوظة"):
     data = load_json()
     if data:
         st.dataframe(pd.DataFrame(data))
