@@ -6,3 +6,4 @@ scikit-learn
 PyGithub
 joblib
 streamlit-autorefresh
+ta
