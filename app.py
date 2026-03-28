@@ -16,13 +16,17 @@ st.set_page_config(layout="wide")
 st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Alerts)")
 
 # ==============================
-# 🔒 FIXED ALERT STATE (NO ERROR)
+# 🔒 SAFE ALERT STATE (FINAL FIX)
 # ==============================
-if "sent_alerts" not in st.session_state:
-    st.session_state.sent_alerts = set()
+raw_alerts = st.session_state.get("sent_alerts", [])
 
-if isinstance(st.session_state.sent_alerts, str):
-    st.session_state.sent_alerts = set()
+# لو أي نوع غير set نحوله بأمان
+if not isinstance(raw_alerts, (set, list, tuple)):
+    raw_alerts = set()
+else:
+    raw_alerts = set(raw_alerts)
+
+st.session_state["sent_alerts"] = raw_alerts
 
 # 🔄 Auto refresh
 st_autorefresh(interval=180000, key="auto_refresh")
@@ -47,7 +51,7 @@ def send_telegram(message):
 
 
 # ==============================
-# 🔊 Sound Alert
+# 🔊 Sound
 # ==============================
 def play_sound():
     try:
@@ -55,12 +59,11 @@ def play_sound():
             sound_bytes = f.read()
         b64 = base64.b64encode(sound_bytes).decode()
 
-        audio_html = f"""
+        st.markdown(f"""
         <audio autoplay>
         <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
-        """
-        st.markdown(audio_html, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
     except:
         pass
 
@@ -95,7 +98,7 @@ def save_github_data(data):
 
 
 # ==============================
-# Indicators
+# Indicators (بدون تغيير)
 # ==============================
 def calculate_rsi(prices, period=14):
     delta = np.diff(prices)
@@ -167,7 +170,7 @@ def fetch_data(coin_id):
 
 
 # ==============================
-# DATA + AI
+# DATA
 # ==============================
 data = load_github_data()
 rows = []
@@ -222,6 +225,9 @@ for coin_data in data:
 df_ai = pd.DataFrame(rows)
 
 
+# ==============================
+# MODEL + ALERTS
+# ==============================
 if len(df_ai) > 50:
 
     X = df_ai[[
@@ -292,24 +298,20 @@ if len(df_ai) > 50:
         ]])[0][1] * 100
 
         # ==============================
-        # 🔔 FIXED NO DUPLICATE ALERT
+        # 🔔 FINAL ALERT FIX (NO DUPLICATE + NO ERROR)
         # ==============================
         alert_key = f"{coin}-{signal}-{round(prices[-1],6)}"
 
         if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
-            if alert_key not in st.session_state.sent_alerts:
 
-                st.session_state.sent_alerts.add(alert_key)
+            if alert_key not in st.session_state["sent_alerts"]:
 
-                msg = (
-                    f"🚀 BUY ALERT\n"
-                    f"Coin: {coin}\n"
-                    f"Price: {prices[-1]:.4f}\n"
-                    f"Chance: {chance:.2f}%\n"
-                    f"Signal: {signal}"
+                st.session_state["sent_alerts"].add(alert_key)
+
+                send_telegram(
+                    f"🚀 BUY ALERT\nCoin: {coin}\nPrice: {prices[-1]:.4f}\nChance: {chance:.2f}%\nSignal: {signal}"
                 )
 
-                send_telegram(msg)
                 play_sound()
 
         latest_rows.append({
