@@ -12,48 +12,30 @@ from streamlit_autorefresh import st_autorefresh
 import base64
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Alerts)")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Sweep + Data Status)")
 
-# 🔄 Auto refresh
+# 🔄 Auto Refresh
 st_autorefresh(interval=180000, key="auto_refresh")
 
 # ==============================
-# 🔔 Telegram Setup
-# ==============================
-TELEGRAM_TOKEN = "PUT_YOUR_TOKEN_HERE"
-TELEGRAM_CHAT_ID = "PUT_YOUR_CHAT_ID_HERE"
-
-def send_telegram(message):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
-        }
-        requests.post(url, data=payload)
-    except:
-        pass
-
-# ==============================
-# 🔊 Sound Alert
+# 🔊 Sound Alert Function
 # ==============================
 def play_sound():
     try:
-        with open("alert.mp3", "rb") as f:
-            sound_bytes = f.read()
+        sound_file = open("alert.mp3", "rb")
+        sound_bytes = sound_file.read()
         b64 = base64.b64encode(sound_bytes).decode()
-
-        audio_html = f"""
-        <audio autoplay>
-        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-        </audio>
+        md = f"""
+            <audio autoplay>
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+            </audio>
         """
-        st.markdown(audio_html, unsafe_allow_html=True)
+        st.markdown(md, unsafe_allow_html=True)
     except:
         pass
 
 # ==============================
-# GitHub
+# GitHub setup
 # ==============================
 GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
 REPO_NAME = st.secrets["GITHUB"]["REPO"]
@@ -63,6 +45,9 @@ FILE_PATH = "data.json"
 g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
+# ==============================
+# Load / Save
+# ==============================
 def load_github_data():
     try:
         file = repo.get_contents(FILE_PATH, ref=BRANCH)
@@ -127,7 +112,8 @@ def get_data_status(candles):
         return "⚠️ بيانات غير كافية"
     elif len(candles) < 60:
         return "🟡 بيانات متوسطة"
-    return "🟢 بيانات قوية"
+    else:
+        return "🟢 بيانات قوية"
 
 # ==============================
 # API
@@ -135,7 +121,7 @@ def get_data_status(candles):
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
-    return requests.get(url).json()
+    return requests.get(url, params=params).json()
 
 def fetch_data(coin_id):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
@@ -179,6 +165,7 @@ def run_collector():
 
                 data.append({"coin":symbol,"candles":candles})
                 updated = True
+
             except:
                 pass
 
@@ -202,7 +189,7 @@ data = load_github_data()
 rows = []
 
 # ==============================
-# AI SCAN
+# AI
 # ==============================
 for coin_data in data:
     candles = coin_data.get("candles", [])
@@ -252,9 +239,6 @@ for coin_data in data:
 
 df_ai = pd.DataFrame(rows)
 
-# ==============================
-# MODEL
-# ==============================
 if len(df_ai) > 50:
 
     X = df_ai[["rsi","drop","volx","change","macd_diff","bb_lower_diff","sma_short","sma_long","score","sweep"]]
@@ -313,21 +297,6 @@ if len(df_ai) > 50:
 
         chance = model.predict_proba([[rsi,drop,volx,change,macd_line-signal_line,prices[-1]-lower_bb,sma_short,sma_long,score,sweep]])[0][1]*100
 
-        # ==============================
-        # 🔔 ALERTS
-        # ==============================
-        if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
-            msg = (
-                f"🚀 BUY ALERT\n"
-                f"Coin: {coin}\n"
-                f"Price: {prices[-1]:.4f}\n"
-                f"Chance: {chance:.2f}%\n"
-                f"Signal: {signal}"
-            )
-
-            send_telegram(msg)
-            play_sound()
-
         latest_rows.append({
             "Coin": coin,
             "Price": round(prices[-1],2),
@@ -343,6 +312,19 @@ if len(df_ai) > 50:
         })
 
     df = pd.DataFrame(latest_rows)
+
+    # ==============================
+    # 🔔 ALERT
+    # ==============================
+    buy_signals = df[df["Signal"].isin(["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"])]
+
+    if not buy_signals.empty:
+        st.warning("🚨 إشارات شراء قوية!")
+
+        play_sound()  # 🔊 صوت
+
+        for _, row in buy_signals.iterrows():
+            st.success(f"{row['Coin']} | {row['Signal']} | Chance: {row['Chance %']}%")
 
     st.dataframe(df.sort_values("Chance %", ascending=False), use_container_width=True)
 
