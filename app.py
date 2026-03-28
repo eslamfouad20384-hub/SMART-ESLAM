@@ -2,9 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import time
-import json
-import os
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from streamlit_autorefresh import st_autorefresh
@@ -13,12 +10,12 @@ from streamlit_autorefresh import st_autorefresh
 # CONFIG
 # =========================
 st.set_page_config(layout="wide")
-st.title("🚀 ULTRA PRO Crypto AI Scanner")
+st.title("🚀 ULTRA PRO Crypto AI Scanner (FIXED)")
 
 st_autorefresh(interval=15 * 60 * 1000, key="refresh")
 
 # =========================
-# TELEGRAM
+# TELEGRAM (optional)
 # =========================
 BOT_TOKEN = "PUT_TOKEN"
 CHAT_ID = "PUT_CHAT_ID"
@@ -66,24 +63,17 @@ def ema(series, span):
     return series.ewm(span=span).mean()
 
 def macd(series):
-    fast = ema(series, 12)
-    slow = ema(series, 26)
-    return fast - slow
-
-def atr(high, low, close, period=14):
-    tr = np.maximum(high - low,
-         np.maximum(abs(high - close.shift()), abs(low - close.shift())))
-    return pd.Series(tr).rolling(period).mean()
+    return ema(series, 12) - ema(series, 26)
 
 def volume_x(vol, avg):
     return vol / (avg + 1e-9)
 
 # =========================
-# SUPPORT / RESISTANCE (simple)
+# SUPPORT / RESISTANCE (FIXED)
 # =========================
-def support_resistance(df):
-    support = df["low"].rolling(10).min()
-    resistance = df["high"].rolling(10).max()
+def support_resistance(df, n=10):
+    support = df["current_price"].rolling(n).min()
+    resistance = df["current_price"].rolling(n).max()
     return support, resistance
 
 # =========================
@@ -110,25 +100,25 @@ if data.empty:
     st.error("No data")
     st.stop()
 
+# =========================
+# CLEAN + FEATURES
+# =========================
 data["price_change"] = data["price_change_percentage_24h"]
 
-# =========================
-# INDICATORS CALC
-# =========================
 data["rsi"] = rsi(data["current_price"])
 data["macd"] = macd(data["current_price"])
 data["vol_x"] = volume_x(data["total_volume"], data["total_volume"].mean())
 
-# ATR optional safety
-data["atr"] = data["high_24h"] - data["low_24h"]
+# =========================
+# SUPPORT / RESISTANCE APPLY
+# =========================
+data["support"], data["resistance"] = support_resistance(data, 10)
 
-# Support / Resistance
-data["support"], data["resistance"] = support_resistance(data)
-
+# تنظيف
 data = data.replace([np.inf, -np.inf], np.nan).dropna()
 
 # =========================
-# TRAIN AI
+# AI TRAIN
 # =========================
 if len(data) > 5:
     train(data)
@@ -137,18 +127,6 @@ if len(data) > 5:
     data["chance"] = model.predict_proba(X)[:, 1] * 100
 else:
     data["chance"] = 0
-
-# =========================
-# SWEEP DETECTION
-# =========================
-def sweep(row):
-    if row["low_24h"] < row["support"] * 0.99:
-        return "⚡ Sweep Buy"
-    if row["high_24h"] > row["resistance"] * 1.01:
-        return "⚡ Sweep Sell"
-    return "—"
-
-data["sweep"] = data.apply(sweep, axis=1)
 
 # =========================
 # SIGNALS
@@ -166,7 +144,6 @@ data["signal"] = data.apply(signal, axis=1)
 # TELEGRAM ALERTS (NO SPAM)
 # =========================
 for _, row in data.iterrows():
-
     key = f"{row['symbol']}-{row['signal']}"
 
     if row["signal"] == "🟢 BUY" and key not in sent_signals:
@@ -175,8 +152,7 @@ for _, row in data.iterrows():
             f"Coin: {row['symbol']}\n"
             f"Price: {row['current_price']}\n"
             f"Chance: {row['chance']:.2f}%\n"
-            f"RSI: {row['rsi']:.2f}\n"
-            f"Sweep: {row['sweep']}"
+            f"RSI: {row['rsi']:.2f}"
         )
         sent_signals.add(key)
 
@@ -191,7 +167,6 @@ st.dataframe(data[[
     "vol_x",
     "chance",
     "signal",
-    "sweep",
     "support",
     "resistance"
 ]])
