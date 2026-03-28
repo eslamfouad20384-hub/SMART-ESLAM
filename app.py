@@ -41,7 +41,7 @@ def send_telegram(message):
 
 
 # ==============================
-# 🔊 Sound Alert (alert.mp3)
+# 🔊 Sound Alert
 # ==============================
 def play_sound():
     try:
@@ -50,14 +50,14 @@ def play_sound():
 
         b64 = base64.b64encode(sound_bytes).decode()
 
-        st.markdown(
-            f"""
-            <audio autoplay>
-                <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-            </audio>
-            """,
-            unsafe_allow_html=True
-        )
+        audio_html = f"""
+        <audio autoplay controls>
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+        </audio>
+        """
+
+        st.components.v1.html(audio_html, height=0)
+
     except:
         pass
 
@@ -183,6 +183,7 @@ def run_collector():
         batch = coins[i:i+10]
 
         def work(c):
+            nonlocal data, updated
             try:
                 symbol = c["symbol"].upper()
                 d = fetch_data(c["id"])
@@ -198,30 +199,19 @@ def run_collector():
                         "volume": float(vols[i]) if i < len(vols) else 0
                     })
 
-                return {"symbol": symbol, "candles": candles}
+                for row in data:
+                    if row["coin"] == symbol:
+                        row["candles"] = candles
+                        updated = True
+                        return
+
+                data.append({"coin":symbol,"candles":candles})
+                updated = True
             except:
-                return None
+                pass
 
-        results = []
         with ThreadPoolExecutor(max_workers=5) as ex:
-            results = list(ex.map(work, batch))
-
-        for r in results:
-            if not r:
-                continue
-
-            symbol = r["symbol"]
-            candles = r["candles"]
-
-            found = False
-            for row in data:
-                if row["coin"] == symbol:
-                    row["candles"] = candles
-                    found = True
-                    break
-
-            if not found:
-                data.append({"coin": symbol, "candles": candles})
+            ex.map(work, batch)
 
         time.sleep(2)
 
@@ -277,6 +267,75 @@ for coin_data in data:
         if macd_line > signal_line: score += 1
         if prices[i] < lower_bb: score += 1
 
+        rows.append({
+            "rsi": rsi,
+            "drop": drop,
+            "volx": volx,
+            "change": change,
+            "macd_diff": macd_line - signal_line,
+            "bb_lower_diff": prices[i] - lower_bb,
+            "sma_short": sma_short,
+            "sma_long": sma_long,
+            "score": score,
+            "sweep": sweep,
+            "target": 1 if prices[i+3] > prices[i] else 0
+        })
+
+
+df_ai = pd.DataFrame(rows)
+
+
+# ==============================
+# MODEL
+# ==============================
+if len(df_ai) > 50:
+
+    X = df_ai[[
+        "rsi","drop","volx","change",
+        "macd_diff","bb_lower_diff",
+        "sma_short","sma_long",
+        "score","sweep"
+    ]]
+    y = df_ai["target"]
+
+    model = RandomForestClassifier(n_estimators=200)
+    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2)
+    model.fit(X_train,y_train)
+
+    latest_rows = []
+
+    for coin_data in data:
+        coin = coin_data["coin"]
+        candles = coin_data.get("candles", [])
+
+        if len(candles) < 25:
+            continue
+
+        prices = np.array([c["price"] for c in candles])
+        vols = np.array([c["volume"] for c in candles])
+
+        rsi = calculate_rsi(prices[-15:])
+        drop = ((prices[-1] - prices.max()) / prices.max()) * 100
+        volx = vols[-1] / (vols[-10:].mean() + 1e-9)
+        change = ((prices[-1] - prices[-3]) / prices[-3]) * 100
+
+        macd_line, signal_line = calculate_macd(prices[-26:]) if len(prices)>=26 else (0,0)
+        upper_bb, lower_bb = calculate_bollinger(prices[-20:]) if len(prices)>=20 else (0,0)
+
+        sma_short = pd.Series(prices[-10:]).mean()
+        sma_long = pd.Series(prices[-30:]).mean() if len(prices)>=30 else sma_short
+
+        support, resistance = get_support_resistance(prices)
+        sweep = detect_liquidity_sweep(prices[-20:])
+
+        score = 0
+        if rsi < 35: score += 3
+        if drop < -20: score += 3
+        if volx > 1.5: score += 2
+        if change > 0: score += 2
+        if macd_line > signal_line: score += 1
+        if prices[-1] < lower_bb: score += 1
+
         if sweep == 1:
             signal = "🔥 Bullish Sweep Buy"
         elif score >= 8:
@@ -288,12 +347,18 @@ for coin_data in data:
         else:
             signal = "❌ No Trade"
 
-        chance = 0
+        chance = model.predict_proba([[
+            rsi,drop,volx,change,
+            macd_line-signal_line,
+            prices[-1]-lower_bb,
+            sma_short,sma_long,
+            score,sweep
+        ]])[0][1] * 100
 
         # ==============================
-        # 🔥 ALERT CONTROL
+        # 🔥 REPEAT ALERT CONTROL (10 min)
         # ==============================
-        key = f"{coin_data['coin']}_{signal}"
+        key = f"{coin}_{signal}"
         now = time.time()
 
         last_time = st.session_state.last_signal_time.get(key, 0)
@@ -302,19 +367,19 @@ for coin_data in data:
             st.session_state.last_signal_time[key] = now
 
             if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
-
                 msg = (
                     f"🚀 BUY ALERT\n"
-                    f"Coin: {coin_data['coin']}\n"
+                    f"Coin: {coin}\n"
                     f"Price: {prices[-1]:.4f}\n"
+                    f"Chance: {chance:.2f}%\n"
                     f"Signal: {signal}"
                 )
 
                 send_telegram(msg)
                 play_sound()
 
-        rows.append({
-            "Coin": coin_data["coin"],
+        latest_rows.append({
+            "Coin": coin,
             "Price": round(prices[-1],2),
             "RSI": round(rsi,2),
             "Drop %": round(drop,2),
@@ -322,9 +387,13 @@ for coin_data in data:
             "Support": round(support,2),
             "Resistance": round(resistance,2),
             "Score": score,
+            "Chance %": round(chance,2),
             "Signal": signal,
             "Data Status": get_data_status(candles)
         })
 
-df = pd.DataFrame(rows)
-st.dataframe(df.sort_values("Price", ascending=False), use_container_width=True)
+    df = pd.DataFrame(latest_rows)
+    st.dataframe(df.sort_values("Chance %", ascending=False), use_container_width=True)
+
+else:
+    st.warning("⚠️ Not enough data")
