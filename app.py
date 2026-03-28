@@ -3,258 +3,195 @@ import pandas as pd
 import numpy as np
 import requests
 import time
-from concurrent.futures import ThreadPoolExecutor
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-import pickle
-import os
 import json
+import os
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from streamlit_autorefresh import st_autorefresh
 
+# =========================
+# CONFIG
+# =========================
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX (Restored)")
+st.title("🚀 ULTRA PRO Crypto AI Scanner")
 
-# ==============================
-# 🔄 Manual Update Button
-# ==============================
-if st.button("🔄 Update Data"):
-    st.cache_data.clear()
-    st.rerun()
+st_autorefresh(interval=15 * 60 * 1000, key="refresh")
 
-# ==============================
-# 🔁 Cached API
-# ==============================
-@st.cache_data(ttl=600)
+# =========================
+# TELEGRAM
+# =========================
+BOT_TOKEN = "PUT_TOKEN"
+CHAT_ID = "PUT_CHAT_ID"
+
+sent_signals = set()
+
+def send_telegram(msg):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=10)
+    except:
+        pass
+
+# =========================
+# DATA
+# =========================
+@st.cache_data(ttl=300)
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {
         "vs_currency": "usd",
         "order": "volume_desc",
         "per_page": 20,
-        "page": 1
+        "page": 1,
+        "sparkline": False
     }
-    return requests.get(url, params=params, timeout=10).json()
 
+    r = requests.get(url, params=params, timeout=10)
+    if r.status_code != 200:
+        return pd.DataFrame()
 
-@st.cache_data(ttl=600)
-def fetch_data(coin_id):
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    params = {"vs_currency": "usd", "days": 30}
+    return pd.DataFrame(r.json())
 
-    try:
-        return requests.get(url, params=params, timeout=10).json()
-    except:
-        return {}
+# =========================
+# INDICATORS
+# =========================
+def rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    rs = gain / (loss + 1e-9)
+    return 100 - (100 / (1 + rs))
 
-# ==============================
-# Indicators
-# ==============================
-def calculate_rsi(prices, period=14):
-    delta = np.diff(prices)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
+def ema(series, span):
+    return series.ewm(span=span).mean()
 
-    avg_gain = pd.Series(gain).ewm(alpha=1/period).mean()
-    avg_loss = pd.Series(loss).ewm(alpha=1/period).mean()
+def macd(series):
+    fast = ema(series, 12)
+    slow = ema(series, 26)
+    return fast - slow
 
-    rs = avg_gain / (avg_loss + 1e-9)
-    return 100 - (100 / (1 + rs)).iloc[-1]
+def atr(high, low, close, period=14):
+    tr = np.maximum(high - low,
+         np.maximum(abs(high - close.shift()), abs(low - close.shift())))
+    return pd.Series(tr).rolling(period).mean()
 
+def volume_x(vol, avg):
+    return vol / (avg + 1e-9)
 
-def calculate_bollinger(prices):
-    s = pd.Series(prices)
-    sma = s.rolling(20).mean()
-    std = s.rolling(20).std()
+# =========================
+# SUPPORT / RESISTANCE (simple)
+# =========================
+def support_resistance(df):
+    support = df["low"].rolling(10).min()
+    resistance = df["high"].rolling(10).max()
+    return support, resistance
 
-    upper = sma + 2 * std
-    lower = sma - 2 * std
+# =========================
+# MODEL
+# =========================
+model = RandomForestClassifier(n_estimators=150)
+scaler = StandardScaler()
 
-    if pd.isna(upper.iloc[-1]):
-        return 0, 0
+def train(df):
+    df = df.dropna()
 
-    return upper.iloc[-1], lower.iloc[-1]
+    X = df[["rsi", "macd", "vol_x"]]
+    y = (df["price_change"] > 0).astype(int)
 
-
-def ema(prices, span):
-    return pd.Series(prices).ewm(span=span).mean().iloc[-1]
-
-
-def calculate_atr(prices):
-    return np.std(prices[-14:])
-
-
-def get_data_status(candles):
-    if len(candles) < 20:
-        return "⚠️ Weak Data"
-    elif len(candles) < 60:
-        return "🟡 Medium Data"
-    else:
-        return "🟢 Strong Data"
-
-# ==============================
-# DATA COLLECTION
-# ==============================
-def run_collector():
-    coins = get_coins()
-    results = []
-
-    def work(c):
-        try:
-            d = fetch_data(c["id"])
-            prices = [p[1] for p in d.get("prices", [])]
-            vols = [v[1] for v in d.get("total_volumes", [])]
-
-            candles = []
-            for i in range(len(prices)):
-                candles.append({
-                    "price": float(prices[i]),
-                    "volume": float(vols[i]) if i < len(vols) else 0
-                })
-
-            return {"coin": c["symbol"].upper(), "candles": candles}
-
-        except:
-            return None
-
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        data = list(ex.map(work, coins))
-
-    return [d for d in data if d]
-
-# ==============================
-# LOAD DATA
-# ==============================
-data = run_collector()
-
-rows = []
-
-# ==============================
-# BUILD DATASET
-# ==============================
-for coin_data in data:
-
-    if not isinstance(coin_data, dict):
-        continue
-
-    candles = coin_data.get("candles", [])
-    if len(candles) < 30:
-        continue
-
-    prices = np.array([c["price"] for c in candles])
-    vols = np.array([c["volume"] for c in candles])
-
-    for i in range(20, len(prices) - 3):
-
-        rsi = calculate_rsi(prices[i-15:i])
-        drop = ((prices[i] - prices[:i].max()) / prices[:i].max())
-        volx = vols[i] / (vols[i-10:i].mean() + 1e-9)
-        change = ((prices[i] - prices[i-3]) / prices[i-3])
-
-        upper, lower = calculate_bollinger(prices[i-20:i])
-        atr = calculate_atr(prices[i-14:i])
-
-        ema_fast = ema(prices[i-10:i], 5)
-        ema_slow = ema(prices[i-20:i], 10)
-
-        rows.append({
-            "rsi": rsi,
-            "drop": drop,
-            "volx": volx,
-            "change": change,
-            "bb": prices[i] - lower,
-            "ema_diff": ema_fast - ema_slow,
-            "atr": atr,
-            "target": 1 if prices[i+3] > prices[i] else 0
-        })
-
-df_ai = pd.DataFrame(rows)
-
-# ==============================
-# TRAIN MODEL
-# ==============================
-MODEL_FILE = "model.pkl"
-
-if df_ai.empty or "target" not in df_ai.columns:
-    st.warning("⚠️ Not enough data")
-    st.stop()
-
-if os.path.exists(MODEL_FILE):
-    with open(MODEL_FILE, "rb") as f:
-        model, scaler = pickle.load(f)
-else:
-    X = df_ai.drop("target", axis=1)
-    y = df_ai["target"]
-
-    scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-
-    model = RandomForestClassifier(n_estimators=200)
     model.fit(X_scaled, y)
 
-    with open(MODEL_FILE, "wb") as f:
-        pickle.dump((model, scaler), f)
+# =========================
+# LOAD DATA
+# =========================
+data = get_coins()
 
-# ==============================
-# PREDICTIONS
-# ==============================
-latest = []
+if data.empty:
+    st.error("No data")
+    st.stop()
 
-for coin_data in data:
+data["price_change"] = data["price_change_percentage_24h"]
 
-    if not isinstance(coin_data, dict):
-        continue
+# =========================
+# INDICATORS CALC
+# =========================
+data["rsi"] = rsi(data["current_price"])
+data["macd"] = macd(data["current_price"])
+data["vol_x"] = volume_x(data["total_volume"], data["total_volume"].mean())
 
-    candles = coin_data.get("candles", [])
-    if len(candles) < 30:
-        continue
+# ATR optional safety
+data["atr"] = data["high_24h"] - data["low_24h"]
 
-    prices = np.array([c["price"] for c in candles])
-    vols = np.array([c["volume"] for c in candles])
+# Support / Resistance
+data["support"], data["resistance"] = support_resistance(data)
 
-    rsi = calculate_rsi(prices[-15:])
-    drop = ((prices[-1] - prices.max()) / prices.max())
-    volx = vols[-1] / (vols[-10:].mean() + 1e-9)
-    change = ((prices[-1] - prices[-3]) / prices[-3])
+data = data.replace([np.inf, -np.inf], np.nan).dropna()
 
-    upper, lower = calculate_bollinger(prices[-20:])
-    atr = calculate_atr(prices[-14:])
+# =========================
+# TRAIN AI
+# =========================
+if len(data) > 5:
+    train(data)
 
-    ema_fast = ema(prices[-10:], 5)
-    ema_slow = ema(prices[-20:], 10)
+    X = scaler.transform(data[["rsi", "macd", "vol_x"]])
+    data["chance"] = model.predict_proba(X)[:, 1] * 100
+else:
+    data["chance"] = 0
 
-    features = np.array([[
-        rsi,
-        drop,
-        volx,
-        change,
-        prices[-1] - lower,
-        ema_fast - ema_slow,
-        atr
-    ]])
+# =========================
+# SWEEP DETECTION
+# =========================
+def sweep(row):
+    if row["low_24h"] < row["support"] * 0.99:
+        return "⚡ Sweep Buy"
+    if row["high_24h"] > row["resistance"] * 1.01:
+        return "⚡ Sweep Sell"
+    return "—"
 
-    features_scaled = scaler.transform(features)
+data["sweep"] = data.apply(sweep, axis=1)
 
-    chance = model.predict_proba(features_scaled)[0][1] * 100
+# =========================
+# SIGNALS
+# =========================
+def signal(row):
+    if row["chance"] > 70 and row["rsi"] < 60:
+        return "🟢 BUY"
+    elif row["chance"] < 40:
+        return "🔴 WEAK"
+    return "🟡 WAIT"
 
-    if chance >= 70:
-        signal = "🔥 Strong Buy"
-    elif chance >= 60:
-        signal = "🚀 Buy"
-    elif chance >= 50:
-        signal = "🟡 Watch"
-    else:
-        signal = "❌ No Trade"
+data["signal"] = data.apply(signal, axis=1)
 
-    latest.append({
-        "Coin": coin_data["coin"],
-        "Price": round(prices[-1], 2),
-        "RSI": round(rsi, 2),
-        "Volume x": round(volx, 2),
-        "Chance %": round(chance, 2),
-        "Signal": signal,
-        "Data Status": get_data_status(candles)
-    })
+# =========================
+# TELEGRAM ALERTS (NO SPAM)
+# =========================
+for _, row in data.iterrows():
 
-df = pd.DataFrame(latest)
+    key = f"{row['symbol']}-{row['signal']}"
 
-st.dataframe(df.sort_values("Chance %", ascending=False), use_container_width=True)
+    if row["signal"] == "🟢 BUY" and key not in sent_signals:
+        send_telegram(
+            f"🚀 ULTRA PRO SIGNAL\n"
+            f"Coin: {row['symbol']}\n"
+            f"Price: {row['current_price']}\n"
+            f"Chance: {row['chance']:.2f}%\n"
+            f"RSI: {row['rsi']:.2f}\n"
+            f"Sweep: {row['sweep']}"
+        )
+        sent_signals.add(key)
+
+# =========================
+# UI
+# =========================
+st.dataframe(data[[
+    "symbol",
+    "current_price",
+    "rsi",
+    "macd",
+    "vol_x",
+    "chance",
+    "signal",
+    "sweep",
+    "support",
+    "resistance"
+]])
