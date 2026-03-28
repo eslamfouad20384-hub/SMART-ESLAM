@@ -16,16 +16,19 @@ st.set_page_config(layout="wide")
 st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Alerts)")
 
 # ==============================
-# 🔒 Prevent duplicate alerts (NEW)
+# 🔒 FIXED ALERT STATE (NO ERROR)
 # ==============================
 if "sent_alerts" not in st.session_state:
+    st.session_state.sent_alerts = set()
+
+if isinstance(st.session_state.sent_alerts, str):
     st.session_state.sent_alerts = set()
 
 # 🔄 Auto refresh
 st_autorefresh(interval=180000, key="auto_refresh")
 
 # ==============================
-# 🔔 Telegram (FROM SECRETS)
+# 🔔 Telegram
 # ==============================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -37,15 +40,15 @@ def send_telegram(message):
 
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
-        }
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
         requests.post(url, data=payload, timeout=5)
     except:
         pass
 
 
+# ==============================
+# 🔊 Sound Alert
+# ==============================
 def play_sound():
     try:
         with open("alert.mp3", "rb") as f:
@@ -62,6 +65,9 @@ def play_sound():
         pass
 
 
+# ==============================
+# GitHub
+# ==============================
 GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
 REPO_NAME = st.secrets["GITHUB"]["REPO"]
 BRANCH = st.secrets["GITHUB"]["BRANCH"]
@@ -88,6 +94,9 @@ def save_github_data(data):
         repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
 
 
+# ==============================
+# Indicators
+# ==============================
 def calculate_rsi(prices, period=14):
     delta = np.diff(prices)
     gain = np.where(delta > 0, delta, 0)
@@ -142,6 +151,9 @@ def get_data_status(candles):
     return "🟢 بيانات قوية"
 
 
+# ==============================
+# API
+# ==============================
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
     params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
@@ -155,7 +167,7 @@ def fetch_data(coin_id):
 
 
 # ==============================
-# AI SCAN (only alert fix inside)
+# DATA + AI
 # ==============================
 data = load_github_data()
 rows = []
@@ -280,12 +292,13 @@ if len(df_ai) > 50:
         ]])[0][1] * 100
 
         # ==============================
-        # 🔔 ALERT FIX (ONLY CHANGE)
+        # 🔔 FIXED NO DUPLICATE ALERT
         # ==============================
         alert_key = f"{coin}-{signal}-{round(prices[-1],6)}"
 
         if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
             if alert_key not in st.session_state.sent_alerts:
+
                 st.session_state.sent_alerts.add(alert_key)
 
                 msg = (
