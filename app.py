@@ -4,13 +4,13 @@ import numpy as np
 import requests
 import time
 import os
+import json
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from github import Github, Auth
-import json
 from streamlit_autorefresh import st_autorefresh
-import base64
 
 st.set_page_config(layout="wide")
 st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Alerts)")
@@ -31,13 +31,12 @@ def send_telegram(message):
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-        requests.post(url, data=payload, timeout=5)
-    except:
-        pass
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=5)
+    except Exception as e:
+        print("Telegram error:", e)
 
 # =========================
-# Sound Alert
+# Sound
 # =========================
 def play_sound():
     try:
@@ -45,14 +44,13 @@ def play_sound():
             sound_bytes = f.read()
         b64 = base64.b64encode(sound_bytes).decode()
 
-        audio_html = f"""
+        st.markdown(f"""
         <audio autoplay>
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
-        """
-        st.markdown(audio_html, unsafe_allow_html=True)
-    except:
-        pass
+        """, unsafe_allow_html=True)
+    except Exception as e:
+        print("Sound error:", e)
 
 # =========================
 # GitHub
@@ -69,16 +67,108 @@ def load_github_data():
     try:
         file = repo.get_contents(FILE_PATH, ref=BRANCH)
         return json.loads(file.decoded_content.decode("utf-8"))
-    except:
+    except Exception as e:
+        print("Load error (maybe file not exist):", e)
         return []
 
 def save_github_data(data):
+    if not isinstance(data, list):
+        print("❌ Data is not list, skipping save")
+        return
+
     content = json.dumps(data, indent=4)
+
     try:
         file = repo.get_contents(FILE_PATH, ref=BRANCH)
-        repo.update_file(file.path, "update", content, file.sha, branch=BRANCH)
-    except:
-        repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
+        repo.update_file(
+            file.path,
+            f"update {time.time()}",
+            content,
+            file.sha,
+            branch=BRANCH
+        )
+        print("✅ File updated on GitHub")
+
+    except Exception as e:
+        print("Update failed:", e)
+
+        try:
+            repo.create_file(
+                FILE_PATH,
+                f"create {time.time()}",
+                content,
+                branch=BRANCH
+            )
+            print("🆕 File created on GitHub")
+
+        except Exception as e2:
+            print("❌ Create failed:", e2)
+
+# =========================
+# API
+# =========================
+def get_coins():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {"vs_currency": "usd", "order": "volume_desc", "per_page": 50, "page": 1}
+    return requests.get(url).json()
+
+def fetch_data(coin_id):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": 30}
+    return requests.get(url, params=params).json()
+
+# =========================
+# Collector
+# =========================
+def run_collector():
+    st.info("⏳ Updating data...")
+
+    coins = get_coins()
+    data = load_github_data()
+
+    for c in coins:
+        try:
+            symbol = c["symbol"].upper()
+            d = fetch_data(c["id"])
+
+            prices = [p[1] for p in d.get("prices", [])]
+            vols = [v[1] for v in d.get("total_volumes", [])]
+
+            if len(prices) == 0:
+                continue
+
+            candles = []
+            for i in range(len(prices)):
+                candles.append({
+                    "timestamp": int(d["prices"][i][0]),
+                    "price": float(prices[i]),
+                    "volume": float(vols[i]) if i < len(vols) else 0
+                })
+
+            found = False
+            for row in data:
+                if row.get("coin") == symbol:
+                    row["candles"] = candles
+                    found = True
+                    break
+
+            if not found:
+                data.append({"coin": symbol, "candles": candles})
+
+        except Exception as e:
+            print(f"Coin error {c.get('id')}:", e)
+
+    save_github_data(data)
+    st.success("✅ Done")
+
+if st.button("🔄 Update"):
+    run_collector()
+
+# =========================
+# Load
+# =========================
+data = load_github_data()
+rows = []
 
 # =========================
 # Indicators
@@ -102,9 +192,7 @@ def calculate_macd(prices):
 def calculate_bollinger(prices):
     sma = pd.Series(prices).rolling(20).mean()
     std = pd.Series(prices).rolling(20).std()
-    upper = sma + 2 * std
-    lower = sma - 2 * std
-    return upper.iloc[-1], lower.iloc[-1]
+    return sma + 2 * std, sma - 2 * std
 
 def get_support_resistance(prices):
     return np.min(prices[-20:]), np.max(prices[-20:])
@@ -116,86 +204,15 @@ def detect_liquidity_sweep(prices, window=20):
     high = np.max(recent)
     low = np.min(recent)
     last = prices[-1]
-    prev = prices[-2]
 
-    if last > high and last < prev:
+    if last > high:
         return -1
-    if last < low and last > prev:
+    if last < low:
         return 1
     return 0
 
-def get_data_status(candles):
-    if len(candles) < 20:
-        return "⚠️ بيانات غير كافية"
-    elif len(candles) < 60:
-        return "🟡 بيانات متوسطة"
-    return "🟢 بيانات قوية"
-
 # =========================
-# API
-# =========================
-def get_coins():
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {"vs_currency": "usd", "order": "volume_desc", "per_page": 50, "page": 1}
-    return requests.get(url).json()
-
-def fetch_data(coin_id):
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    params = {"vs_currency": "usd", "days": 30}
-    return requests.get(url, params=params).json()
-
-# =========================
-# Collector (FIXED - NO THREAD SIDE EFFECTS)
-# =========================
-def run_collector():
-    st.info("⏳ Updating data...")
-
-    coins = get_coins()
-    data = load_github_data()
-
-    for c in coins:
-        try:
-            symbol = c["symbol"].upper()
-            d = fetch_data(c["id"])
-
-            prices = [p[1] for p in d.get("prices", [])]
-            vols = [v[1] for v in d.get("total_volumes", [])]
-
-            candles = []
-            for i in range(len(prices)):
-                candles.append({
-                    "timestamp": int(d["prices"][i][0]),
-                    "price": float(prices[i]),
-                    "volume": float(vols[i]) if i < len(vols) else 0
-                })
-
-            found = False
-            for row in data:
-                if row["coin"] == symbol:
-                    row["candles"] = candles
-                    found = True
-                    break
-
-            if not found:
-                data.append({"coin": symbol, "candles": candles})
-
-        except:
-            pass
-
-    save_github_data(data)
-    st.success("✅ Done")
-
-if st.button("🔄 Update"):
-    run_collector()
-
-# =========================
-# Load data
-# =========================
-data = load_github_data()
-rows = []
-
-# =========================
-# AI SCAN
+# AI dataset
 # =========================
 for coin_data in data:
     candles = coin_data.get("candles", [])
@@ -205,43 +222,45 @@ for coin_data in data:
     prices = np.array([c["price"] for c in candles])
     vols = np.array([c["volume"] for c in candles])
 
-    for i in range(20, len(prices) - 3):
+    for i in range(30, len(prices) - 3):
+        try:
+            rsi = calculate_rsi(prices[i-15:i])
+            drop = ((prices[i] - prices[:i].max()) / prices[:i].max()) * 100
+            volx = vols[i] / (vols[i-10:i].mean() + 1e-9)
+            change = ((prices[i] - prices[i-3]) / prices[i-3]) * 100
 
-        rsi = calculate_rsi(prices[i-15:i])
-        drop = ((prices[i] - prices[:i].max()) / prices[:i].max()) * 100
-        volx = vols[i] / (vols[i-10:i].mean() + 1e-9)
-        change = ((prices[i] - prices[i-3]) / prices[i-3]) * 100
+            macd_line, signal_line = calculate_macd(prices[i-26:i])
+            upper_bb, lower_bb = calculate_bollinger(prices[i-20:i])
 
-        macd_line, signal_line = calculate_macd(prices[i-26:i]) if i >= 26 else (0, 0)
-        upper_bb, lower_bb = calculate_bollinger(prices[i-20:i]) if i >= 20 else (0, 0)
+            sma_short = pd.Series(prices[i-10:i]).mean()
+            sma_long = pd.Series(prices[i-30:i]).mean()
 
-        sma_short = pd.Series(prices[i-10:i]).mean()
-        sma_long = pd.Series(prices[i-30:i]).mean() if i >= 30 else sma_short
+            support, resistance = get_support_resistance(prices[i-20:i])
+            sweep = detect_liquidity_sweep(prices[i-20:i])
 
-        support, resistance = get_support_resistance(prices[i-20:i])
-        sweep = detect_liquidity_sweep(prices[i-20:i])
+            score = 0
+            if rsi < 35: score += 3
+            if drop < -20: score += 3
+            if volx > 1.5: score += 2
+            if change > 0: score += 2
+            if macd_line > signal_line: score += 1
 
-        score = 0
-        if rsi < 35: score += 3
-        if drop < -20: score += 3
-        if volx > 1.5: score += 2
-        if change > 0: score += 2
-        if macd_line > signal_line: score += 1
-        if prices[i] < lower_bb: score += 1
+            rows.append({
+                "rsi": rsi,
+                "drop": drop,
+                "volx": volx,
+                "change": change,
+                "macd_diff": macd_line - signal_line,
+                "bb_lower_diff": prices[i] - lower_bb.iloc[-1],
+                "sma_short": sma_short,
+                "sma_long": sma_long,
+                "score": score,
+                "sweep": sweep,
+                "target": 1 if prices[i+3] > prices[i] else 0
+            })
 
-        rows.append({
-            "rsi": rsi,
-            "drop": drop,
-            "volx": volx,
-            "change": change,
-            "macd_diff": macd_line - signal_line,
-            "bb_lower_diff": prices[i] - lower_bb,
-            "sma_short": sma_short,
-            "sma_long": sma_long,
-            "score": score,
-            "sweep": sweep,
-            "target": 1 if prices[i+3] > prices[i] else 0
-        })
+        except Exception as e:
+            print("Row error:", e)
 
 df_ai = pd.DataFrame(rows)
 
@@ -249,7 +268,6 @@ df_ai = pd.DataFrame(rows)
 # MODEL
 # =========================
 if len(df_ai) > 50:
-
     X = df_ai[[
         "rsi","drop","volx","change",
         "macd_diff","bb_lower_diff",
@@ -268,7 +286,7 @@ if len(df_ai) > 50:
         coin = coin_data["coin"]
         candles = coin_data.get("candles", [])
 
-        if len(candles) < 25:
+        if len(candles) < 30:
             continue
 
         prices = np.array([c["price"] for c in candles])
@@ -279,11 +297,11 @@ if len(df_ai) > 50:
         volx = vols[-1] / (vols[-10:].mean() + 1e-9)
         change = ((prices[-1] - prices[-3]) / prices[-3]) * 100
 
-        macd_line, signal_line = calculate_macd(prices[-26:]) if len(prices) >= 26 else (0, 0)
-        upper_bb, lower_bb = calculate_bollinger(prices[-20:]) if len(prices) >= 20 else (0, 0)
+        macd_line, signal_line = calculate_macd(prices[-26:])
+        upper_bb, lower_bb = calculate_bollinger(prices[-20:])
 
         sma_short = pd.Series(prices[-10:]).mean()
-        sma_long = pd.Series(prices[-30:]).mean() if len(prices) >= 30 else sma_short
+        sma_long = pd.Series(prices[-30:]).mean()
 
         support, resistance = get_support_resistance(prices)
         sweep = detect_liquidity_sweep(prices[-20:])
@@ -293,52 +311,28 @@ if len(df_ai) > 50:
         if drop < -20: score += 3
         if volx > 1.5: score += 2
         if change > 0: score += 2
-        if macd_line > signal_line: score += 1
-        if prices[-1] < lower_bb: score += 1
 
-        if sweep == 1:
-            signal = "🔥 Bullish Sweep Buy"
-        elif sweep == -1:
-            signal = "⚠️ Bearish Sweep Fakeout"
-        elif score >= 8:
-            signal = "🔥 Strong Buy"
+        signal = "Hold"
+        if score >= 8:
+            signal = "Strong Buy"
         elif score >= 5:
-            signal = "🚀 Buy"
-        elif score >= 3:
-            signal = "🟠 Hold"
-        else:
-            signal = "❌ No Trade"
+            signal = "Buy"
 
-        chance = model.predict_proba([[ 
+        chance = model.predict_proba([[
             rsi, drop, volx, change,
             macd_line - signal_line,
-            prices[-1] - lower_bb,
+            prices[-1] - lower_bb.iloc[-1],
             sma_short, sma_long,
             score, sweep
         ]])[0][1] * 100
-
-        if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
-            msg = f"""🚀 BUY ALERT
-Coin: {coin}
-Price: {prices[-1]:.4f}
-Chance: {chance:.2f}%
-Signal: {signal}"""
-
-            send_telegram(msg)
-            play_sound()
 
         latest_rows.append({
             "Coin": coin,
             "Price": round(prices[-1], 2),
             "RSI": round(rsi, 2),
-            "Drop %": round(drop, 2),
-            "Volume x": round(volx, 2),
-            "Support": round(support, 2),
-            "Resistance": round(resistance, 2),
             "Score": score,
             "Chance %": round(chance, 2),
-            "Signal": signal,
-            "Data Status": get_data_status(candles)
+            "Signal": signal
         })
 
     df = pd.DataFrame(latest_rows)
