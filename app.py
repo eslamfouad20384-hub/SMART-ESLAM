@@ -15,7 +15,7 @@ import base64
 st.set_page_config(layout="wide")
 st.title("🚀 Smart Crypto Scanner AI PRO MAX (Optimized)")
 
-# 🔄 Auto refresh
+# 🔄 Auto refresh (UI فقط)
 st_autorefresh(interval=180000, key="auto_refresh")
 
 # ==============================
@@ -23,7 +23,6 @@ st_autorefresh(interval=180000, key="auto_refresh")
 # ==============================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -58,6 +57,7 @@ def play_sound():
 GITHUB_TOKEN = st.secrets["GITHUB"]["TOKEN"]
 REPO_NAME = st.secrets["GITHUB"]["REPO"]
 BRANCH = st.secrets["GITHUB"]["BRANCH"]
+
 FILE_PATH = "data.json"
 ALERT_FILE = "alerts.json"
 
@@ -96,15 +96,27 @@ def calculate_rsi(prices, period=14):
 
 
 def calculate_macd(prices):
-    ema_fast = pd.Series(prices).ewm(span=12).mean()
-    ema_slow = pd.Series(prices).ewm(span=26).mean()
+    series = pd.Series(prices)
+
+    if len(series) < 26:
+        return 0, 0
+
+    ema_fast = series.ewm(span=12).mean()
+    ema_slow = series.ewm(span=26).mean()
     macd = ema_fast - ema_slow
     signal = macd.ewm(span=9).mean()
+
+    if len(macd) == 0:
+        return 0, 0
+
     return macd.iloc[-1], signal.iloc[-1]
 
 
 def calculate_bollinger(prices):
     s = pd.Series(prices)
+    if len(s) < 20:
+        return 0, 0
+
     sma = s.rolling(20).mean()
     std = s.rolling(20).std()
     return (sma + 2*std).iloc[-1], (sma - 2*std).iloc[-1]
@@ -126,11 +138,16 @@ def fetch_data(coin_id):
 
 
 # ==============================
-# Collector
+# COLLECTOR (NO DUPLICATES)
 # ==============================
 def run_collector():
     coins = get_coins()
-    data = load_file(FILE_PATH)
+    raw = load_file(FILE_PATH)
+
+    if isinstance(raw, dict):
+        old_data = raw.get("data", [])
+    else:
+        old_data = raw
 
     for c in coins:
         try:
@@ -140,43 +157,74 @@ def run_collector():
             prices = [p[1] for p in d.get("prices", [])]
             vols = [v[1] for v in d.get("total_volumes", [])]
 
-            candles = [{
-                "price": float(prices[i]),
-                "volume": float(vols[i]) if i < len(vols) else 0
-            } for i in range(len(prices))]
+            candles = [
+                {
+                    "price": float(prices[i]),
+                    "volume": float(vols[i]) if i < len(vols) else 0
+                }
+                for i in range(len(prices))
+            ]
 
             found = False
-            for row in data:
+
+            for row in old_data:
                 if row["coin"] == symbol:
                     row["candles"] = candles
                     found = True
                     break
 
             if not found:
-                data.append({"coin": symbol, "candles": candles})
+                old_data.append({
+                    "coin": symbol,
+                    "candles": candles
+                })
 
         except:
             pass
 
-    save_file(FILE_PATH, data)
+    payload = {
+        "last_update": time.time(),
+        "data": old_data
+    }
+
+    save_file(FILE_PATH, payload)
     st.success("✅ Data Updated")
 
 
-if st.button("🔄 Update"):
+if st.button("🔄 Update Now"):
     run_collector()
 
 
 # ==============================
 # LOAD DATA
 # ==============================
-data = load_file(FILE_PATH)
+raw = load_file(FILE_PATH)
+
+if isinstance(raw, dict):
+    data = raw.get("data", [])
+    last_update = raw.get("last_update", 0)
+else:
+    data = raw
+    last_update = 0
+
 alerts_sent = load_file(ALERT_FILE)
 
-rows = []
+# ==============================
+# AUTO UPDATE (15 min)
+# ==============================
+UPDATE_INTERVAL = 900  # 15 minutes
+current_time = time.time()
+
+if current_time - last_update > UPDATE_INTERVAL:
+    st.info("⏳ Auto updating data...")
+    run_collector()
+
 
 # ==============================
-# BUILD DATASET
+# AI SCAN
 # ==============================
+rows = []
+
 for coin_data in data:
     candles = coin_data.get("candles", [])
     if len(candles) < 30:
@@ -186,6 +234,7 @@ for coin_data in data:
     vols = np.array([c["volume"] for c in candles])
 
     for i in range(25, len(prices)-3):
+
         rsi = calculate_rsi(prices[i-14:i])
         drop = ((prices[i] - np.max(prices[i-20:i])) / np.max(prices[i-20:i])) * 100
         volx = vols[i] / (np.mean(vols[i-10:i]) + 1e-9)
@@ -205,6 +254,7 @@ for coin_data in data:
         })
 
 df_ai = pd.DataFrame(rows)
+
 
 # ==============================
 # MODEL
@@ -258,13 +308,6 @@ if len(df_ai) > 50:
             send_telegram(msg)
             play_sound()
             alerts_sent.append(key)
-
-        latest_rows.append({
-            "Coin": coin,
-            "Price": round(prices[-1], 3),
-            "Chance %": round(chance, 2),
-            "Signal": signal
-        })
 
     save_file(ALERT_FILE, alerts_sent)
 
