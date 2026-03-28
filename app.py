@@ -12,28 +12,39 @@ import os
 import json
 
 st.set_page_config(layout="wide")
-st.title("🚀 Smart Crypto Scanner AI PRO MAX (Optimized)")
+st.title("🚀 Smart Crypto Scanner AI PRO MAX (Restored)")
 
 # ==============================
-# 🔁 Caching
+# 🔄 Manual Update Button
+# ==============================
+if st.button("🔄 Update Data"):
+    st.cache_data.clear()
+    st.rerun()
+
+# ==============================
+# 🔁 Cached API
 # ==============================
 @st.cache_data(ttl=600)
 def get_coins():
     url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {"vs_currency":"usd","order":"volume_desc","per_page":20,"page":1}
+    params = {
+        "vs_currency": "usd",
+        "order": "volume_desc",
+        "per_page": 20,
+        "page": 1
+    }
     return requests.get(url, params=params, timeout=10).json()
+
 
 @st.cache_data(ttl=600)
 def fetch_data(coin_id):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    params = {"vs_currency":"usd","days":30}
+    params = {"vs_currency": "usd", "days": 30}
 
-    for _ in range(3):  # retry
-        try:
-            return requests.get(url, params=params, timeout=10).json()
-        except:
-            time.sleep(1)
-    return {}
+    try:
+        return requests.get(url, params=params, timeout=10).json()
+    except:
+        return {}
 
 # ==============================
 # Indicators
@@ -42,31 +53,46 @@ def calculate_rsi(prices, period=14):
     delta = np.diff(prices)
     gain = np.where(delta > 0, delta, 0)
     loss = np.where(delta < 0, -delta, 0)
+
     avg_gain = pd.Series(gain).ewm(alpha=1/period).mean()
     avg_loss = pd.Series(loss).ewm(alpha=1/period).mean()
+
     rs = avg_gain / (avg_loss + 1e-9)
     return 100 - (100 / (1 + rs)).iloc[-1]
+
 
 def calculate_bollinger(prices):
     s = pd.Series(prices)
     sma = s.rolling(20).mean()
     std = s.rolling(20).std()
+
     upper = sma + 2 * std
     lower = sma - 2 * std
 
     if pd.isna(upper.iloc[-1]):
-        return 0,0
+        return 0, 0
 
     return upper.iloc[-1], lower.iloc[-1]
 
-def calculate_atr(prices):
-    return np.std(prices[-14:])
 
 def ema(prices, span):
     return pd.Series(prices).ewm(span=span).mean().iloc[-1]
 
+
+def calculate_atr(prices):
+    return np.std(prices[-14:])
+
+
+def get_data_status(candles):
+    if len(candles) < 20:
+        return "⚠️ Weak Data"
+    elif len(candles) < 60:
+        return "🟡 Medium Data"
+    else:
+        return "🟢 Strong Data"
+
 # ==============================
-# Collector (بدون nonlocal)
+# DATA COLLECTION
 # ==============================
 def run_collector():
     coins = get_coins()
@@ -75,8 +101,8 @@ def run_collector():
     def work(c):
         try:
             d = fetch_data(c["id"])
-            prices = [p[1] for p in d.get("prices",[])]
-            vols = [v[1] for v in d.get("total_volumes",[])]
+            prices = [p[1] for p in d.get("prices", [])]
+            vols = [v[1] for v in d.get("total_volumes", [])]
 
             candles = []
             for i in range(len(prices)):
@@ -86,6 +112,7 @@ def run_collector():
                 })
 
             return {"coin": c["symbol"].upper(), "candles": candles}
+
         except:
             return None
 
@@ -95,14 +122,14 @@ def run_collector():
     return [d for d in data if d]
 
 # ==============================
-# Load Data
+# LOAD DATA
 # ==============================
 data = run_collector()
 
 rows = []
 
 # ==============================
-# Build Dataset
+# BUILD DATASET
 # ==============================
 for coin_data in data:
 
@@ -116,7 +143,7 @@ for coin_data in data:
     prices = np.array([c["price"] for c in candles])
     vols = np.array([c["volume"] for c in candles])
 
-    for i in range(20, len(prices)-3):
+    for i in range(20, len(prices) - 3):
 
         rsi = calculate_rsi(prices[i-15:i])
         drop = ((prices[i] - prices[:i].max()) / prices[:i].max())
@@ -143,9 +170,13 @@ for coin_data in data:
 df_ai = pd.DataFrame(rows)
 
 # ==============================
-# Train or Load Model
+# TRAIN MODEL
 # ==============================
 MODEL_FILE = "model.pkl"
+
+if df_ai.empty or "target" not in df_ai.columns:
+    st.warning("⚠️ Not enough data")
+    st.stop()
 
 if os.path.exists(MODEL_FILE):
     with open(MODEL_FILE, "rb") as f:
@@ -164,7 +195,7 @@ else:
         pickle.dump((model, scaler), f)
 
 # ==============================
-# Predictions
+# PREDICTIONS
 # ==============================
 latest = []
 
@@ -191,7 +222,16 @@ for coin_data in data:
     ema_fast = ema(prices[-10:], 5)
     ema_slow = ema(prices[-20:], 10)
 
-    features = np.array([[rsi, drop, volx, change, prices[-1]-lower, ema_fast-ema_slow, atr]])
+    features = np.array([[
+        rsi,
+        drop,
+        volx,
+        change,
+        prices[-1] - lower,
+        ema_fast - ema_slow,
+        atr
+    ]])
+
     features_scaled = scaler.transform(features)
 
     chance = model.predict_proba(features_scaled)[0][1] * 100
@@ -208,8 +248,11 @@ for coin_data in data:
     latest.append({
         "Coin": coin_data["coin"],
         "Price": round(prices[-1], 2),
+        "RSI": round(rsi, 2),
+        "Volume x": round(volx, 2),
         "Chance %": round(chance, 2),
-        "Signal": signal
+        "Signal": signal,
+        "Data Status": get_data_status(candles)
     })
 
 df = pd.DataFrame(latest)
