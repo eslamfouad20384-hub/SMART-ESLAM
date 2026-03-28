@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import requests
 import time
-import os
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -19,26 +18,21 @@ st.title("🚀 Smart Crypto Scanner AI PRO MAX (With Alerts)")
 st_autorefresh(interval=180000, key="auto_refresh")
 
 # ==============================
-# 🔔 Telegram
+# 🔔 Telegram Setup
 # ==============================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
+TELEGRAM_TOKEN = "PUT_YOUR_TOKEN_HERE"
+TELEGRAM_CHAT_ID = "PUT_YOUR_CHAT_ID_HERE"
 
 def send_telegram(message):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message
         }
-        requests.post(url, data=payload, timeout=5)
+        requests.post(url, data=payload)
     except:
         pass
-
 
 # ==============================
 # 🔊 Sound Alert
@@ -47,27 +41,16 @@ def play_sound():
     try:
         with open("alert.mp3", "rb") as f:
             sound_bytes = f.read()
-
         b64 = base64.b64encode(sound_bytes).decode()
 
         audio_html = f"""
-        <audio autoplay controls>
-            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+        <audio autoplay>
+        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
         """
-
-        st.components.v1.html(audio_html, height=0)
-
+        st.markdown(audio_html, unsafe_allow_html=True)
     except:
         pass
-
-
-# ==============================
-# ⏱️ Signal Repeat Control
-# ==============================
-if "last_signal_time" not in st.session_state:
-    st.session_state.last_signal_time = {}
-
 
 # ==============================
 # GitHub
@@ -80,14 +63,12 @@ FILE_PATH = "data.json"
 g = Github(auth=Auth.Token(GITHUB_TOKEN))
 repo = g.get_repo(REPO_NAME)
 
-
 def load_github_data():
     try:
         file = repo.get_contents(FILE_PATH, ref=BRANCH)
         return json.loads(file.decoded_content.decode("utf-8"))
     except:
         return []
-
 
 def save_github_data(data):
     content = json.dumps(data, indent=4)
@@ -96,7 +77,6 @@ def save_github_data(data):
         repo.update_file(file.path, "update", content, file.sha, branch=BRANCH)
     except:
         repo.create_file(FILE_PATH, "create", content, branch=BRANCH)
-
 
 # ==============================
 # Indicators
@@ -107,9 +87,8 @@ def calculate_rsi(prices, period=14):
     loss = np.where(delta < 0, -delta, 0)
     avg_gain = pd.Series(gain).ewm(alpha=1/period).mean()
     avg_loss = pd.Series(loss).ewm(alpha=1/period).mean()
-    rs = avg_gain / (avg_loss + 1e-9)
+    rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs)).iloc[-1]
-
 
 def calculate_macd(prices):
     ema_fast = pd.Series(prices).ewm(span=12).mean()
@@ -118,7 +97,6 @@ def calculate_macd(prices):
     signal = macd.ewm(span=9).mean()
     return macd.iloc[-1], signal.iloc[-1]
 
-
 def calculate_bollinger(prices):
     sma = pd.Series(prices).rolling(20).mean()
     std = pd.Series(prices).rolling(20).std()
@@ -126,10 +104,8 @@ def calculate_bollinger(prices):
     lower = sma - 2 * std
     return upper.iloc[-1], lower.iloc[-1]
 
-
 def get_support_resistance(prices):
     return np.min(prices[-20:]), np.max(prices[-20:])
-
 
 def detect_liquidity_sweep(prices, window=20):
     if len(prices) < window:
@@ -146,14 +122,12 @@ def detect_liquidity_sweep(prices, window=20):
         return 1
     return 0
 
-
 def get_data_status(candles):
     if len(candles) < 20:
         return "⚠️ بيانات غير كافية"
     elif len(candles) < 60:
         return "🟡 بيانات متوسطة"
     return "🟢 بيانات قوية"
-
 
 # ==============================
 # API
@@ -163,12 +137,10 @@ def get_coins():
     params = {"vs_currency":"usd","order":"volume_desc","per_page":50,"page":1}
     return requests.get(url).json()
 
-
 def fetch_data(coin_id):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     params = {"vs_currency":"usd","days":30}
     return requests.get(url, params=params).json()
-
 
 # ==============================
 # Collector
@@ -220,10 +192,8 @@ def run_collector():
 
     st.success("✅ Done")
 
-
 if st.button("🔄 Update"):
     run_collector()
-
 
 # ==============================
 # Load data
@@ -231,9 +201,8 @@ if st.button("🔄 Update"):
 data = load_github_data()
 rows = []
 
-
 # ==============================
-# AI SCAN + ALERTS
+# AI SCAN
 # ==============================
 for coin_data in data:
     candles = coin_data.get("candles", [])
@@ -281,21 +250,14 @@ for coin_data in data:
             "target": 1 if prices[i+3] > prices[i] else 0
         })
 
-
 df_ai = pd.DataFrame(rows)
-
 
 # ==============================
 # MODEL
 # ==============================
 if len(df_ai) > 50:
 
-    X = df_ai[[
-        "rsi","drop","volx","change",
-        "macd_diff","bb_lower_diff",
-        "sma_short","sma_long",
-        "score","sweep"
-    ]]
+    X = df_ai[["rsi","drop","volx","change","macd_diff","bb_lower_diff","sma_short","sma_long","score","sweep"]]
     y = df_ai["target"]
 
     model = RandomForestClassifier(n_estimators=200)
@@ -338,6 +300,8 @@ if len(df_ai) > 50:
 
         if sweep == 1:
             signal = "🔥 Bullish Sweep Buy"
+        elif sweep == -1:
+            signal = "⚠️ Bearish Sweep Fakeout"
         elif score >= 8:
             signal = "🔥 Strong Buy"
         elif score >= 5:
@@ -347,36 +311,22 @@ if len(df_ai) > 50:
         else:
             signal = "❌ No Trade"
 
-        chance = model.predict_proba([[
-            rsi,drop,volx,change,
-            macd_line-signal_line,
-            prices[-1]-lower_bb,
-            sma_short,sma_long,
-            score,sweep
-        ]])[0][1] * 100
+        chance = model.predict_proba([[rsi,drop,volx,change,macd_line-signal_line,prices[-1]-lower_bb,sma_short,sma_long,score,sweep]])[0][1]*100
 
         # ==============================
-        # 🔥 REPEAT ALERT CONTROL (10 min)
+        # 🔔 ALERTS
         # ==============================
-        key = f"{coin}_{signal}"
-        now = time.time()
+        if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
+            msg = (
+                f"🚀 BUY ALERT\n"
+                f"Coin: {coin}\n"
+                f"Price: {prices[-1]:.4f}\n"
+                f"Chance: {chance:.2f}%\n"
+                f"Signal: {signal}"
+            )
 
-        last_time = st.session_state.last_signal_time.get(key, 0)
-
-        if now - last_time >= 600:
-            st.session_state.last_signal_time[key] = now
-
-            if signal in ["🔥 Strong Buy", "🚀 Buy", "🔥 Bullish Sweep Buy"]:
-                msg = (
-                    f"🚀 BUY ALERT\n"
-                    f"Coin: {coin}\n"
-                    f"Price: {prices[-1]:.4f}\n"
-                    f"Chance: {chance:.2f}%\n"
-                    f"Signal: {signal}"
-                )
-
-                send_telegram(msg)
-                play_sound()
+            send_telegram(msg)
+            play_sound()
 
         latest_rows.append({
             "Coin": coin,
@@ -393,6 +343,7 @@ if len(df_ai) > 50:
         })
 
     df = pd.DataFrame(latest_rows)
+
     st.dataframe(df.sort_values("Chance %", ascending=False), use_container_width=True)
 
 else:
